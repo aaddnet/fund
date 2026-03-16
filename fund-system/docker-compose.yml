@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16
+    container_name: fund_system_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fund_system
+      POSTGRES_USER: fund_user
+      POSTGRES_PASSWORD: fund_pass
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+
+volumes:
+  pgdata:
