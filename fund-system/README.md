@@ -2,17 +2,17 @@
 
 This directory contains an initial scaffold for a Fund Management System V1:
 
-- **PostgreSQL schema** in `db/schema.sql`
-- **FastAPI backend** in `backend/app`
-- **Next.js frontend** in `frontend`
-- **Project notes/docs** in `docs`
+- **PostgreSQL schema** in `../db/schema.sql`
+- **FastAPI backend** in `../backend/app`
+- **Next.js frontend** in `../frontend`
+- **Docker Compose** in `docker-compose.yml`
 
 ## Quick start
 
 ## Prerequisites
 
 - Docker + Docker Compose plugin (you already confirmed Docker is installed locally)
-- Python 3.10+
+- Python 3.11+ (project code uses `datetime.timezone.utc` / modern stdlib patterns; Python 3.12 tested locally)
 - Node.js 18+
 
 ### 1) Start database
@@ -27,8 +27,9 @@ docker compose ps
 ### 2) Run backend
 
 ```bash
-cd backend
+cd ../backend
 pip install -r requirements.txt
+export DATABASE_URL='postgresql+psycopg2://fund_user:fund_pass@127.0.0.1:5432/fund_system'
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -37,7 +38,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 3) Run frontend
 
 ```bash
-cd frontend
+cd ../frontend
 npm install
 npm run dev
 ```
@@ -47,8 +48,8 @@ npm run dev
 Use three terminals to start dependencies first, then verify from a fourth terminal:
 
 1. `docker compose up -d db`
-2. `cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
-3. `cd frontend && npm install && npm run dev`
+2. `cd ../backend && export DATABASE_URL='postgresql+psycopg2://fund_user:fund_pass@127.0.0.1:5432/fund_system' && pip install -r requirements.txt && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+3. `cd ../frontend && npm install && npm run dev`
 4. Verification terminal:
 
 ```bash
@@ -83,8 +84,8 @@ Open: <http://127.0.0.1:3000>
 
 Expected page content:
 
-- Title: `Fund Management System`
-- Description: `V1 scaffold is ready.`
+- Title: `Fund Management Dashboard`
+- Description/body text: `V1 frontend initialized.`
 
 ## Common issues
 

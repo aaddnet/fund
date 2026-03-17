@@ -13,6 +13,7 @@ def calc_fee(db: Session, fund_id: int, fee_date):
     row = FeeRecord(fund_id=fund_id, fee_date=fee_date, gross_return=gross_return, fee_rate=fee_rate, fee_amount_usd=fee_amount)
     db.add(row)
     db.commit()
+    db.refresh(row)
     return row
 
 

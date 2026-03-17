@@ -17,6 +17,7 @@ def subscribe(db: Session, fund_id: int, client_id: int, tx_date, amount_usd: De
     row = ShareTransaction(fund_id=fund_id, client_id=client_id, tx_date=tx_date, tx_type="subscribe", amount_usd=amount_usd, shares=shares, nav_at_date=nav.nav_per_share)
     db.add(row)
     db.commit()
+    db.refresh(row)
     return row
 
 
@@ -30,6 +31,7 @@ def redeem(db: Session, fund_id: int, client_id: int, tx_date, amount_usd: Decim
     row = ShareTransaction(fund_id=fund_id, client_id=client_id, tx_date=tx_date, tx_type="redeem", amount_usd=amount_usd, shares=shares, nav_at_date=nav.nav_per_share)
     db.add(row)
     db.commit()
+    db.refresh(row)
     return row
 
 

@@ -13,7 +13,7 @@ def fetch_and_save_rates(db: Session, base: str, quote: str, snapshot_date: date
     resp.raise_for_status()
     payload = resp.json()
     rate = payload["rates"][quote]
-    item = ExchangeRate(base_currency=base, quote_currency=quote, rate=rate, snapshot_date=snapshot_date, updated_at=datetime.now(UTC))
+    item = ExchangeRate(base_currency=base, quote_currency=quote, rate=rate, snapshot_date=snapshot_date, updated_at=datetime.now(timezone.utc))
     db.add(item)
     db.commit()
     db.refresh(item)

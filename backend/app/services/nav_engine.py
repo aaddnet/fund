@@ -4,6 +4,10 @@ from app.models import AssetPrice, AssetSnapshot, NAVRecord, Position
 
 
 def calc_nav(db: Session, fund_id: int, nav_date):
+    existing = db.query(NAVRecord).filter_by(fund_id=fund_id, nav_date=nav_date).first()
+    if existing:
+        return existing
+
     positions = db.query(Position).filter(Position.snapshot_date == nav_date).all()
     price_map = {p.asset_code: p for p in db.query(AssetPrice).filter_by(snapshot_date=nav_date).all()}
 
