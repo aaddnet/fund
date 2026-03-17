@@ -113,6 +113,24 @@ curl -s http://127.0.0.1:8000/health/db && echo
 
 If both interfaces return `ok` and the homepage renders the text above, local scaffold functionality is complete for the current V1 scope.
 
+## Helper scripts
+
+From the repository root:
+
+```bash
+./start-local.sh
+```
+
+This starts Docker PostgreSQL, the backend, and the frontend together.
+
+For a repeatable smoke test against the local stack:
+
+```bash
+./smoke-test.sh
+```
+
+This seeds demo data and verifies health, NAV, shares, fees, and the frontend homepage.
+
 ## Scope
 
 This is an initialization scaffold intended to match the requested project tree and V1 direction.
