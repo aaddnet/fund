@@ -1,12 +1,61 @@
 const API_BASE = process.env.NEXT_PUBLIC_API || 'http://127.0.0.1:8000';
 
+type Pagination = {
+  page: number;
+  size: number;
+  total: number;
+};
+
 type ApiListResponse<T> = {
-  items?: T[];
-  pagination?: {
-    page: number;
-    size: number;
-    total: number;
-  };
+  items: T[];
+  pagination: Pagination;
+};
+
+export type Fund = {
+  id: number;
+  name: string;
+  base_currency: string;
+  total_shares: number;
+};
+
+export type Client = {
+  id: number;
+  name: string;
+  email?: string | null;
+};
+
+export type Account = {
+  id: number;
+  fund_id: number;
+  client_id?: number | null;
+  broker: string;
+  account_no: string;
+  position_count: number;
+  transaction_count: number;
+  latest_snapshot_date?: string | null;
+};
+
+export type Position = {
+  id: number;
+  account_id: number;
+  asset_code: string;
+  quantity: number;
+  average_cost?: number | null;
+  currency: string;
+  snapshot_date: string;
+};
+
+export type Transaction = {
+  id: number;
+  account_id: number;
+  trade_date: string;
+  asset_code: string;
+  quantity: number;
+  price: number;
+  currency: string;
+  tx_type: string;
+  fee: number;
+  import_batch_id?: number | null;
 };
 
 export type NavRecord = {
@@ -84,6 +133,17 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
+function buildQuery(params: Record<string, string | number | null | undefined>) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      query.set(key, String(value));
+    }
+  });
+  const suffix = query.toString();
+  return suffix ? `?${suffix}` : '';
+}
+
 export async function getHealth() {
   return fetchJson<{ status: string }>('/health');
 }
@@ -92,8 +152,8 @@ export async function getHealthDb() {
   return fetchJson<{ db: string }>('/health/db');
 }
 
-export async function getNav() {
-  return fetchJson<NavRecord[]>('/nav');
+export async function getNav(fundId?: number) {
+  return fetchJson<NavRecord[]>(`/nav${buildQuery({ fund_id: fundId })}`);
 }
 
 export async function getShareHistory() {
@@ -112,6 +172,26 @@ export async function getImportBatch(batchId: number) {
   return fetchJson<ImportBatch>(`/import/${batchId}`);
 }
 
+export async function getFunds(page = 1, size = 50) {
+  return fetchJson<ApiListResponse<Fund>>(`/fund${buildQuery({ page, size })}`);
+}
+
+export async function getClients(page = 1, size = 50) {
+  return fetchJson<ApiListResponse<Client>>(`/client${buildQuery({ page, size })}`);
+}
+
+export async function getAccounts(params?: { page?: number; size?: number; fundId?: number; clientId?: number }) {
+  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, client_id: params?.clientId })}`);
+}
+
+export async function getPositions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; snapshotDate?: string }) {
+  return fetchJson<ApiListResponse<Position>>(`/position${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`);
+}
+
+export async function getTransactions(params?: { page?: number; size?: number; fundId?: number; accountId?: number }) {
+  return fetchJson<ApiListResponse<Transaction>>(`/transaction${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId })}`);
+}
+
 export async function uploadImportBatch(payload: { source: string; accountId: number; file: File }) {
   const formData = new FormData();
   formData.append('source', payload.source);
@@ -127,10 +207,6 @@ export async function confirmImportBatch(batchId: number) {
   return fetchJson<ImportBatch>(`/import/${batchId}/confirm`, {
     method: 'POST',
   });
-}
-
-export async function getPlaceholderResource(path: string) {
-  return fetchJson<ApiListResponse<Record<string, unknown>>>(path);
 }
 
 export async function createNav(payload: { fund_id: number; nav_date: string }) {

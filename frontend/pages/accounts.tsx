@@ -1,90 +1,49 @@
-import { useMemo, useState } from 'react';
-import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
-import { getPlaceholderResource } from '../lib/api';
+import { Account, getAccounts } from '../lib/api';
 import { styles } from '../lib/ui';
 
-type AccountDraft = {
-  id: number;
-  fundId: string;
-  clientId: string;
-  broker: string;
-  accountNo: string;
-  status: string;
-};
-
 type Props = {
+  rows: Account[];
   total: number;
   error?: string;
 };
 
-export default function Page({ total, error }: Props) {
-  const [rows, setRows] = useState<AccountDraft[]>([
-    { id: 1, fundId: '1', clientId: '1', broker: 'Interactive Brokers', accountNo: 'ACC-001', status: 'Active' },
-    { id: 2, fundId: '1', clientId: '—', broker: 'Kraken', accountNo: 'CRYPTO-01', status: 'Pending review' },
-  ]);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const current = useMemo(() => rows.find((item) => item.id === editingId), [rows, editingId]);
-  const [form, setForm] = useState({ fundId: '1', clientId: '', broker: '', accountNo: '', status: 'Draft' });
-
-  function resetForm() {
-    setEditingId(null);
-    setForm({ fundId: '1', clientId: '', broker: '', accountNo: '', status: 'Draft' });
-  }
-
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (editingId) {
-      setRows((items) => items.map((item) => (item.id === editingId ? { id: editingId, ...form } : item)));
-    } else {
-      setRows((items) => [{ id: Date.now(), ...form }, ...items]);
-    }
-    resetForm();
-  }
-
-  function startEdit(row: AccountDraft) {
-    setEditingId(row.id);
-    setForm({ fundId: row.fundId, clientId: row.clientId, broker: row.broker, accountNo: row.accountNo, status: row.status });
-  }
-
+export default function Page({ rows, total, error }: Props) {
   return (
-    <Layout title='Accounts' subtitle='Maintain operational account records with an internal draft workflow while backend CRUD is pending.'>
+    <Layout title='Accounts' subtitle='Read live account records from the backend, including recent snapshot coverage and activity counts.'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: '#dc2626' }}>Backend warning: {error}</div> : null}
       <div style={styles.grid2}>
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>{editingId ? 'Edit Account Draft' : 'Create Account Draft'}</h3>
-          <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 14 }}>
-            <FormField label='Fund ID'><input style={styles.input} value={form.fundId} onChange={(e) => setForm({ ...form, fundId: e.target.value })} /></FormField>
-            <FormField label='Client ID'><input style={styles.input} value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} /></FormField>
-            <FormField label='Broker'><input style={styles.input} value={form.broker} onChange={(e) => setForm({ ...form, broker: e.target.value })} /></FormField>
-            <FormField label='Account No'><input style={styles.input} value={form.accountNo} onChange={(e) => setForm({ ...form, accountNo: e.target.value })} /></FormField>
-            <FormField label='Status'><input style={styles.input} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} /></FormField>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button style={styles.buttonPrimary} type='submit'>{editingId ? 'Save Changes' : 'Create Draft'}</button>
-              <button style={styles.buttonSecondary} type='button' onClick={resetForm}>Reset</button>
-            </div>
-          </form>
+          <h3 style={{ marginTop: 0 }}>Account Registry</h3>
+          <p style={{ marginBottom: 8 }}>Total accounts: {total}</p>
+          <p style={{ color: '#64748b', marginBottom: 0 }}>
+            This page now uses the real `/account` list endpoint. It is read-only in this batch, but the data comes from live funds, clients, positions, and transactions.
+          </p>
         </div>
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Backend Status</h3>
-          <p>Placeholder account endpoint total: {total}</p>
-          <p style={{ color: '#64748b' }}>Until account CRUD endpoints are implemented, this page provides a realistic front-end create/edit workflow for product review and UX validation.</p>
-          {current ? <p style={{ marginBottom: 0 }}>Editing: {current.broker} / {current.accountNo}</p> : null}
+          <h3 style={{ marginTop: 0 }}>Operational Notes</h3>
+          <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
+            <li>Accounts are tied to funds via <code>fund_id</code>.</li>
+            <li>Snapshot coverage shows the latest available <code>position.snapshot_date</code>.</li>
+            <li>Counts help quickly identify active vs dormant accounts.</li>
+          </ul>
         </div>
       </div>
       <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Draft Account Register</h3>
+        <h3 style={{ marginTop: 0 }}>Live Account Register</h3>
         <ProductTable
-          emptyText='No account drafts yet.'
+          emptyText='No accounts found.'
           rows={rows}
           columns={[
-            { key: 'fund', title: 'Fund', render: (item) => item.fundId },
-            { key: 'client', title: 'Client', render: (item) => item.clientId || '—' },
+            { key: 'id', title: 'Account ID', render: (item) => item.id },
+            { key: 'fund', title: 'Fund', render: (item) => item.fund_id },
+            { key: 'client', title: 'Client', render: (item) => item.client_id ?? '—' },
             { key: 'broker', title: 'Broker', render: (item) => item.broker },
-            { key: 'account', title: 'Account No', render: (item) => item.accountNo },
-            { key: 'status', title: 'Status', render: (item) => item.status },
-            { key: 'action', title: 'Action', render: (item) => <button style={styles.buttonSecondary} onClick={() => startEdit(item)}>Edit</button> },
+            { key: 'account', title: 'Account No', render: (item) => item.account_no },
+            { key: 'positions', title: 'Positions', render: (item) => item.position_count },
+            { key: 'transactions', title: 'Transactions', render: (item) => item.transaction_count },
+            { key: 'snapshot', title: 'Latest Snapshot', render: (item) => item.latest_snapshot_date || '—' },
           ]}
         />
       </div>
@@ -94,9 +53,9 @@ export default function Page({ total, error }: Props) {
 
 export async function getServerSideProps() {
   try {
-    const data = await getPlaceholderResource('/account');
-    return { props: { total: data.pagination?.total ?? data.items?.length ?? 0 } };
+    const data = await getAccounts();
+    return { props: { rows: data.items ?? [], total: data.pagination?.total ?? data.items?.length ?? 0 } };
   } catch (error) {
-    return { props: { total: 0, error: error instanceof Error ? error.message : 'unknown error' } };
+    return { props: { rows: [], total: 0, error: error instanceof Error ? error.message : 'unknown error' } };
   }
 }

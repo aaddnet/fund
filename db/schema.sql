@@ -66,6 +66,13 @@ CREATE TABLE IF NOT EXISTS import_batch (
     id SERIAL PRIMARY KEY,
     source VARCHAR(50) NOT NULL,
     filename VARCHAR(255),
+    account_id INT NOT NULL REFERENCES account(id),
+    status VARCHAR(30) NOT NULL DEFAULT 'uploaded',
+    row_count INT NOT NULL DEFAULT 0,
+    parsed_count INT NOT NULL DEFAULT 0,
+    confirmed_count INT NOT NULL DEFAULT 0,
+    failed_reason TEXT,
+    preview_json TEXT NOT NULL DEFAULT '[]',
     imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -113,6 +120,11 @@ CREATE TABLE IF NOT EXISTS asset_snapshot (
     quantity NUMERIC(24,8) NOT NULL,
     price_usd NUMERIC(24,8) NOT NULL,
     value_usd NUMERIC(24,8) NOT NULL,
+    currency VARCHAR(10),
+    price_native NUMERIC(24,8),
+    value_native NUMERIC(24,8),
+    fx_rate_to_usd NUMERIC(24,8),
+    account_ids TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

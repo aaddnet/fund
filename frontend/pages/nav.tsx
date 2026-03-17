@@ -2,17 +2,19 @@ import { useState } from 'react';
 import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
-import { createNav, getNav, NavRecord } from '../lib/api';
+import { createNav, getFunds, getNav, Fund, NavRecord } from '../lib/api';
 import { formatNumber, styles } from '../lib/ui';
 
 type Props = {
   nav: NavRecord[];
+  funds: Fund[];
   error?: string;
 };
 
-export default function Page({ nav, error }: Props) {
+export default function Page({ nav, funds, error }: Props) {
+  const defaultFundId = String(funds[0]?.id ?? 1);
   const [rows, setRows] = useState(nav);
-  const [fundId, setFundId] = useState('1');
+  const [fundId, setFundId] = useState(defaultFundId);
   const [navDate, setNavDate] = useState('2026-06-30');
   const [submitState, setSubmitState] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
@@ -27,7 +29,7 @@ export default function Page({ nav, error }: Props) {
         const merged = [created, ...current.filter((item) => item.id !== created.id)];
         return merged.sort((a, b) => b.nav_date.localeCompare(a.nav_date));
       });
-      setSubmitState(`NAV calculated successfully for ${created.nav_date}.`);
+      setSubmitState(`NAV calculated successfully for fund ${created.fund_id} on ${created.nav_date}.`);
     } catch (submitError) {
       setSubmitState(submitError instanceof Error ? submitError.message : 'Failed to calculate NAV.');
     } finally {
@@ -36,14 +38,20 @@ export default function Page({ nav, error }: Props) {
   }
 
   return (
-    <Layout title='NAV Records' subtitle='Track locked NAV snapshots and calculate new records from seeded positions and prices.'>
+    <Layout title='NAV Records' subtitle='Calculate fund-level NAV from account-linked positions and snapshot FX/price data.'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: '#dc2626' }}>Backend warning: {error}</div> : null}
       <div style={styles.grid2}>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>Calculate NAV</h3>
           <form onSubmit={handleCreateNav} style={{ display: 'grid', gap: 14 }}>
-            <FormField label='Fund ID'>
-              <input style={styles.input} value={fundId} onChange={(event) => setFundId(event.target.value)} />
+            <FormField label='Fund'>
+              <select style={styles.input} value={fundId} onChange={(event) => setFundId(event.target.value)}>
+                {funds.map((fund) => (
+                  <option key={fund.id} value={fund.id}>
+                    #{fund.id} · {fund.name}
+                  </option>
+                ))}
+              </select>
             </FormField>
             <FormField label='NAV Date'>
               <input style={styles.input} type='date' value={navDate} onChange={(event) => setNavDate(event.target.value)} />
@@ -59,9 +67,9 @@ export default function Page({ nav, error }: Props) {
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>Guidance</h3>
           <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
-            <li>Use dates that already have seeded positions and asset prices.</li>
-            <li>Repeated calculations are idempotent and return the existing NAV record.</li>
-            <li>Locked records are treated as finalized snapshots for downstream share flows.</li>
+            <li>NAV is scoped by <code>fund_id</code> and <code>nav_date</code>.</li>
+            <li>Only positions from accounts that belong to the target fund are included.</li>
+            <li>Non-USD positions can fall back to average cost with snapshot-date FX conversion when price snapshots are missing.</li>
           </ul>
         </div>
       </div>
@@ -87,8 +95,9 @@ export default function Page({ nav, error }: Props) {
 
 export async function getServerSideProps() {
   try {
-    return { props: { nav: await getNav() } };
+    const [nav, fundData] = await Promise.all([getNav(), getFunds()]);
+    return { props: { nav, funds: fundData.items ?? [] } };
   } catch (error) {
-    return { props: { nav: [], error: error instanceof Error ? error.message : 'unknown error' } };
+    return { props: { nav: [], funds: [], error: error instanceof Error ? error.message : 'unknown error' } };
   }
 }

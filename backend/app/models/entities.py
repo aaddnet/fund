@@ -129,6 +129,11 @@ class AssetSnapshot(Base, TimestampMixin):
     quantity = Column(Numeric(24, 8), nullable=False)
     price_usd = Column(Numeric(24, 8), nullable=False)
     value_usd = Column(Numeric(24, 8), nullable=False)
+    currency = Column(String(10))
+    price_native = Column(Numeric(24, 8))
+    value_native = Column(Numeric(24, 8))
+    fx_rate_to_usd = Column(Numeric(24, 8))
+    account_ids = Column(Text)
 
 
 class ShareTransaction(Base, TimestampMixin):

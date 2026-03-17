@@ -1,5 +1,6 @@
 from sqlalchemy import inspect, text
 from fastapi import FastAPI
+
 from app.api.routes import router
 from app.db import Base, engine
 
@@ -45,7 +46,34 @@ def ensure_import_batch_columns() -> None:
         conn.execute(text("UPDATE import_batch SET account_id = COALESCE(account_id, 1)"))
 
 
+def ensure_asset_snapshot_columns() -> None:
+    inspector = inspect(engine)
+    if "asset_snapshot" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("asset_snapshot")}
+    statements: list[str] = []
+    if "currency" not in columns:
+        statements.append("ALTER TABLE asset_snapshot ADD COLUMN currency VARCHAR(10)")
+    if "price_native" not in columns:
+        statements.append("ALTER TABLE asset_snapshot ADD COLUMN price_native NUMERIC(24,8)")
+    if "value_native" not in columns:
+        statements.append("ALTER TABLE asset_snapshot ADD COLUMN value_native NUMERIC(24,8)")
+    if "fx_rate_to_usd" not in columns:
+        statements.append("ALTER TABLE asset_snapshot ADD COLUMN fx_rate_to_usd NUMERIC(24,8)")
+    if "account_ids" not in columns:
+        statements.append("ALTER TABLE asset_snapshot ADD COLUMN account_ids TEXT")
+
+    if not statements:
+        return
+
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 ensure_import_batch_columns()
+ensure_asset_snapshot_columns()
 app.include_router(router)
 
 
