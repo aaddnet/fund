@@ -39,10 +39,18 @@ export type FeeRecord = {
   fee_amount_usd: number;
 };
 
-async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`);
+async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers || {}),
+    },
+  });
+
   if (!response.ok) {
-    throw new Error(`API ${path} failed with ${response.status}`);
+    const message = await response.text();
+    throw new Error(message || `API ${path} failed with ${response.status}`);
   }
   return response.json();
 }
@@ -69,6 +77,20 @@ export async function getFees() {
 
 export async function getPlaceholderResource(path: string) {
   return fetchJson<ApiListResponse<Record<string, unknown>>>(path);
+}
+
+export async function createNav(payload: { fund_id: number; nav_date: string }) {
+  return fetchJson<NavRecord>('/nav/calc', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createShareSubscription(payload: { fund_id: number; client_id: number; tx_date: string; amount_usd: number }) {
+  return fetchJson<ShareTransaction>('/share/subscribe', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export { API_BASE };
