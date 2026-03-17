@@ -1,6 +1,10 @@
 import type { GetServerSidePropsContext } from 'next';
 
-const API_BASE = process.env.NEXT_PUBLIC_API || 'http://127.0.0.1:8000';
+const BROWSER_API_BASE = process.env.NEXT_PUBLIC_API || 'http://127.0.0.1:8000';
+const SERVER_API_BASE = process.env.INTERNAL_API_BASE || process.env.NEXT_PUBLIC_API || 'http://127.0.0.1:8000';
+const API_BASE = typeof window === 'undefined' ? SERVER_API_BASE : BROWSER_API_BASE;
+// 用于前端界面展示的地址必须保持 SSR/客户端一致，避免 hydration mismatch。
+const PUBLIC_API_BASE = BROWSER_API_BASE;
 const ACCESS_TOKEN_COOKIE = 'invest_access_token';
 const REFRESH_TOKEN_COOKIE = 'invest_refresh_token';
 const LOCALE_COOKIE = 'invest_locale';
@@ -464,4 +468,4 @@ export async function createShareRedemption(payload: { fund_id: number; client_i
   });
 }
 
-export { API_BASE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, LOCALE_COOKIE, buildQuery, fetchJson };
+export { API_BASE, PUBLIC_API_BASE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, LOCALE_COOKIE, buildQuery, fetchJson };

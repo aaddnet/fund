@@ -42,7 +42,8 @@ services:
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API: http://backend:8000
+      NEXT_PUBLIC_API: http://127.0.0.1:8000
+      INTERNAL_API_BASE: http://backend:8000
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     volumes:

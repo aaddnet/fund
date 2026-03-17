@@ -28,11 +28,14 @@
 
 ### 2. 登录获取 token
 
-系统会自动 bootstrap 本地测试用户：
+系统会自动 bootstrap 本地测试用户（全新数据库初始化时）：
 
-- `admin / admin123`
-- `ops / ops123`
-- `client1 / client123`
+- `admin / Admin12345`
+- `ops / Ops1234567`
+- `client1 / Client12345`
+- `ops.viewer / Viewer12345`
+
+> 注意：如果你使用的是旧数据库卷，历史 seed 用户密码可能不会被自动覆盖，需以当前库里实际账号状态为准。
 
 示例：
 

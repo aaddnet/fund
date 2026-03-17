@@ -1,6 +1,6 @@
 import Layout from '../components/Layout';
 import StatCard from '../components/StatCard';
-import { API_BASE } from '../lib/api';
+import { PUBLIC_API_BASE } from '../lib/api';
 import { requirePageAuth } from '../lib/pageAuth';
 import { styles } from '../lib/ui';
 
@@ -9,7 +9,7 @@ export default function Home() {
     <Layout title='Fund Management Dashboard' subtitle='A local operations workspace for NAV, share flows, accounts, and imports.'>
       <div style={styles.grid3}>
         <StatCard label='Environment' value='Local Dev' hint='Docker + FastAPI + Next.js' />
-        <StatCard label='Backend API' value='Ready' tone='success' hint={API_BASE} />
+        <StatCard label='Backend API' value='Ready' tone='success' hint={PUBLIC_API_BASE} />
         <StatCard label='Workflow' value='Manual V1' tone='warning' hint='Supports smoke tests and seeded demo data' />
       </div>
       <div style={{ ...styles.card, marginTop: 16 }}>

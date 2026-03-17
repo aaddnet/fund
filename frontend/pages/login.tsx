@@ -1,18 +1,24 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { GetServerSidePropsContext } from 'next';
 import FormField from '../components/FormField';
 import { useAuth } from '../lib/auth';
-import { getServerLocale, getServerRefreshToken } from '../lib/api';
+import { clearSessionCookies, getServerLocale } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { colors, styles } from '../lib/ui';
 
 export default function LoginPage() {
   const { signIn } = useAuth();
   const { locale, setLocale, t } = useI18n();
-  const [username, setUsername] = useState('ops');
-  const [password, setPassword] = useState('Ops1234567');
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('admin123');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    // 登录页不应该因为浏览器里残留的坏 token / refresh cookie 进入重定向死循环。
+    // 进入登录页时先清掉本地会话 cookie，让用户总能回到一个可操作的干净状态。
+    clearSessionCookies();
+  }, []);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -62,13 +68,5 @@ export default function LoginPage() {
 }
 
 export async function getServerSideProps(context: GetServerSidePropsContext) {
-  if (getServerRefreshToken(context)) {
-    return {
-      redirect: {
-        destination: '/',
-        permanent: false,
-      },
-    };
-  }
   return { props: { initialLocale: getServerLocale(context) } };
 }

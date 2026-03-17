@@ -237,11 +237,11 @@ curl -I http://127.0.0.1:3000
 
 ```bash
 curl -X POST http://127.0.0.1:8000/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin123"}'
+  -F 'username=admin' \
+  -F 'password=Admin12345'
 ```
 
-记录返回的 token。
+记录返回的 `access_token` / `refresh_token`。
 
 ### 第三步：验证 import 流程
 
@@ -421,6 +421,18 @@ npm run dev
 3. 手工打开前端验证页面
 4. 登录并检查 auth / customer boundary
 5. 做一轮 import / nav / share / fee 人工回归
+
+如果你要继续进入下一阶段，建议优先做：
+
+- 前端登录态 UI 闭环
+- 更完整 migration 管理
+- E2E 自动化
+- 部署与监控
+on 管理
+- E2E 自动化
+- 部署与监控
+署与监控
+R 回跳失败
 
 如果你要继续进入下一阶段，建议优先做：
 

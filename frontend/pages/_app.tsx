@@ -5,7 +5,7 @@ import { AuthProvider, useAuth } from '../lib/auth';
 import { I18nProvider } from '../lib/i18n';
 import { styles } from '../lib/ui';
 
-const PUBLIC_ROUTES = new Set(['/login']);
+const PUBLIC_ROUTES = new Set(['/login', '/auth/complete']);
 
 function RouteGuard({ children }: { children: ReactNode }) {
   const router = useRouter();

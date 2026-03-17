@@ -87,7 +87,14 @@ export function AuthProvider({ children, initialUser }: { children: ReactNode; i
     const session = await login(payload);
     applySession(session);
     const next = typeof router.query.next === 'string' ? router.query.next : '/';
-    await router.replace(next);
+
+    // 先进入一个公开的登录完成页，等浏览器把 cookie 稳定带上后，再进入受保护页面。
+    if (typeof window !== 'undefined') {
+      window.location.assign(`/auth/complete?next=${encodeURIComponent(next)}`);
+      return;
+    }
+
+    await router.replace(`/auth/complete?next=${encodeURIComponent(next)}`);
   }, [applySession, router]);
 
   const signOut = useCallback(async () => {
