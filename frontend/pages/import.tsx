@@ -3,6 +3,7 @@ import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import { confirmImportBatch, getImportBatches, ImportBatch, uploadImportBatch } from '../lib/api';
+import { requirePageAuth } from '../lib/pageAuth';
 import { colors, styles } from '../lib/ui';
 
 type Props = {
@@ -162,10 +163,15 @@ export default function Page({ batches, error }: Props) {
   );
 }
 
-export async function getServerSideProps() {
+export async function getServerSideProps(context: any) {
+  const auth = await requirePageAuth(context);
+  if ('redirect' in auth) {
+    return auth;
+  }
+
   try {
-    return { props: { batches: await getImportBatches() } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, batches: await getImportBatches(auth.accessToken) } };
   } catch (error) {
-    return { props: { batches: [], error: error instanceof Error ? error.message : 'unknown error' } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, batches: [], error: error instanceof Error ? error.message : 'unknown error' } };
   }
 }

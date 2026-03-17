@@ -2,6 +2,7 @@ import Link from 'next/link';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import { Client, Fund, getClients, getFunds } from '../lib/api';
+import { requirePageAuth } from '../lib/pageAuth';
 import { colors, formatNumber, styles } from '../lib/ui';
 
 type Props = {
@@ -73,17 +74,22 @@ export default function Page({ rows, total, funds, filters, error }: Props) {
   );
 }
 
-export async function getServerSideProps(context: { query: Record<string, string | string[] | undefined> }) {
+export async function getServerSideProps(context: any) {
   const fundId = typeof context.query.fundId === 'string' ? context.query.fundId : '';
   const q = typeof context.query.q === 'string' ? context.query.q : '';
 
+  const auth = await requirePageAuth(context);
+  if ('redirect' in auth) {
+    return auth;
+  }
+
   try {
     const [clientData, fundData] = await Promise.all([
-      getClients({ fundId: fundId ? Number(fundId) : undefined, q: q || undefined }),
-      getFunds(),
+      getClients({ accessToken: auth.accessToken, fundId: fundId ? Number(fundId) : undefined, q: q || undefined }),
+      getFunds(1, 50, auth.accessToken),
     ]);
     return {
-      props: {
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, 
         rows: clientData.items ?? [],
         total: clientData.pagination?.total ?? clientData.items?.length ?? 0,
         funds: fundData.items ?? [],
@@ -92,7 +98,7 @@ export async function getServerSideProps(context: { query: Record<string, string
     };
   } catch (error) {
     return {
-      props: {
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, 
         rows: [],
         total: 0,
         funds: [],

@@ -3,6 +3,7 @@ import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import { createNav, getFunds, getNav, Fund, NavRecord } from '../lib/api';
+import { requirePageAuth } from '../lib/pageAuth';
 import { formatNumber, styles } from '../lib/ui';
 
 type Props = {
@@ -93,11 +94,16 @@ export default function Page({ nav, funds, error }: Props) {
   );
 }
 
-export async function getServerSideProps() {
+export async function getServerSideProps(context: any) {
+  const auth = await requirePageAuth(context);
+  if ('redirect' in auth) {
+    return auth;
+  }
+
   try {
-    const [nav, fundData] = await Promise.all([getNav(), getFunds()]);
-    return { props: { nav, funds: fundData.items ?? [] } };
+    const [nav, fundData] = await Promise.all([getNav(undefined, auth.accessToken), getFunds(1, 50, auth.accessToken)]);
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, nav, funds: fundData.items ?? [] } };
   } catch (error) {
-    return { props: { nav: [], funds: [], error: error instanceof Error ? error.message : 'unknown error' } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, nav: [], funds: [], error: error instanceof Error ? error.message : 'unknown error' } };
   }
 }

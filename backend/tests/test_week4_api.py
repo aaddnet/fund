@@ -4,15 +4,28 @@ from app.models import ExchangeRate
 
 
 def test_login_returns_bearer_token_and_me_profile(client):
-    response = client.post("/auth/login", data={"username": "ops", "password": "ops123"})
+    response = client.post("/auth/login", data={"username": "ops", "password": "Ops1234567"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["token_type"] == "bearer"
+    assert payload["refresh_token"]
     token = payload["access_token"]
 
     me_response = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert me_response.status_code == 200
     assert me_response.json()["actor"]["role"] == "ops"
+    assert "shares.write" in me_response.json()["actor"]["permissions"]
+
+
+
+def test_refresh_rotates_access_token(client):
+    login_response = client.post("/auth/login", data={"username": "ops", "password": "Ops1234567"})
+    payload = login_response.json()
+    refresh_response = client.post("/auth/refresh", data={"refresh_token": payload["refresh_token"]})
+    assert refresh_response.status_code == 200
+    refreshed = refresh_response.json()
+    assert refreshed["access_token"] != payload["access_token"]
+    assert refreshed["refresh_token"] != payload["refresh_token"]
 
 
 def test_client_readonly_is_scoped_to_own_customer_data(client, seeded_db, client_headers):
@@ -78,3 +91,27 @@ def test_logout_revokes_token(client, auth_headers):
 
     me_response = client.get("/auth/me", headers=auth_headers)
     assert me_response.status_code == 401
+
+
+
+def test_lockout_after_repeated_failed_logins(client, seeded_db):
+    for _ in range(5):
+        response = client.post("/auth/login", data={"username": "ops", "password": "WrongPass123"})
+        assert response.status_code == 401
+
+    locked_response = client.post("/auth/login", data={"username": "ops", "password": "Ops1234567"})
+    assert locked_response.status_code == 423
+
+
+
+def test_viewer_can_read_but_cannot_write(client, seeded_db):
+    login_response = client.post("/auth/login", data={"username": "viewer", "password": "Viewer12345"})
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    read_response = client.get("/nav", headers=headers)
+    assert read_response.status_code == 200
+
+    write_response = client.post("/share/subscribe", headers=headers, json={"fund_id": 1, "client_id": 1, "tx_date": "2026-06-30", "amount_usd": "50"})
+    assert write_response.status_code == 403
+    assert "missing permissions" in write_response.json()["detail"]

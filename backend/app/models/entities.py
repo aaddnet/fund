@@ -215,14 +215,21 @@ class AuthUser(Base, TimestampMixin):
     display_name = Column(String(255))
     is_active = Column(Boolean, nullable=False, default=True)
     last_login_at = Column(DateTime(timezone=True))
+    password_changed_at = Column(DateTime(timezone=True))
+    failed_login_attempts = Column(Integer, nullable=False, default=0)
+    last_failed_login_at = Column(DateTime(timezone=True))
+    locked_until = Column(DateTime(timezone=True))
 
 
 class AuthSession(Base, TimestampMixin):
     __tablename__ = "auth_session"
-    __table_args__ = (UniqueConstraint("session_token_hash"),)
+    __table_args__ = (UniqueConstraint("session_token_hash"), UniqueConstraint("refresh_token_hash"),)
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("auth_user.id"), nullable=False)
     session_token_hash = Column(String(255), nullable=False)
+    refresh_token_hash = Column(String(255), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
+    refresh_expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked_at = Column(DateTime(timezone=True))
     last_seen_at = Column(DateTime(timezone=True))
+    refreshed_at = Column(DateTime(timezone=True))

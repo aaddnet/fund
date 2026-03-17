@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import { Account, Client, Fund, getAccounts, getClients, getFunds } from '../lib/api';
+import { requirePageAuth } from '../lib/pageAuth';
 import { colors, styles } from '../lib/ui';
 
 type Props = {
@@ -97,21 +98,26 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
   );
 }
 
-export async function getServerSideProps(context: { query: Record<string, string | string[] | undefined> }) {
+export async function getServerSideProps(context: any) {
   const fundId = typeof context.query.fundId === 'string' ? context.query.fundId : '';
   const clientId = typeof context.query.clientId === 'string' ? context.query.clientId : '';
   const broker = typeof context.query.broker === 'string' ? context.query.broker : '';
   const q = typeof context.query.q === 'string' ? context.query.q : '';
 
+  const auth = await requirePageAuth(context);
+  if ('redirect' in auth) {
+    return auth;
+  }
+
   try {
     const [accountData, fundData, clientData] = await Promise.all([
-      getAccounts({ fundId: fundId ? Number(fundId) : undefined, clientId: clientId ? Number(clientId) : undefined, broker: broker || undefined, q: q || undefined }),
-      getFunds(),
-      getClients(),
+      getAccounts({ accessToken: auth.accessToken, fundId: fundId ? Number(fundId) : undefined, clientId: clientId ? Number(clientId) : undefined, broker: broker || undefined, q: q || undefined }),
+      getFunds(1, 50, auth.accessToken),
+      getClients({ accessToken: auth.accessToken }),
     ]);
 
     return {
-      props: {
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, 
         rows: accountData.items ?? [],
         total: accountData.pagination?.total ?? accountData.items?.length ?? 0,
         funds: fundData.items ?? [],
@@ -121,7 +127,7 @@ export async function getServerSideProps(context: { query: Record<string, string
     };
   } catch (error) {
     return {
-      props: {
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, 
         rows: [],
         total: 0,
         funds: [],

@@ -3,6 +3,7 @@ import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import StatCard from '../components/StatCard';
 import { Client, Fund, ReportOverview, getClients, getFunds, getReportOverview } from '../lib/api';
+import { requirePageAuth } from '../lib/pageAuth';
 import { colors, formatNumber, styles } from '../lib/ui';
 
 type Props = {
@@ -138,23 +139,28 @@ export default function Page({ report, funds, clients, filters, error }: Props) 
   );
 }
 
-export async function getServerSideProps(context: { query: Record<string, string | string[] | undefined> }) {
+export async function getServerSideProps(context: any) {
   const periodType = typeof context.query.periodType === 'string' ? context.query.periodType : 'quarter';
   const periodValue = typeof context.query.periodValue === 'string' ? context.query.periodValue : '2026-Q1';
   const fundId = typeof context.query.fundId === 'string' ? context.query.fundId : '';
   const clientId = typeof context.query.clientId === 'string' ? context.query.clientId : '';
 
+  const auth = await requirePageAuth(context);
+  if ('redirect' in auth) {
+    return auth;
+  }
+
   try {
     const [report, fundData, clientData] = await Promise.all([
-      getReportOverview({ periodType, periodValue, fundId: fundId ? Number(fundId) : undefined, clientId: clientId ? Number(clientId) : undefined }),
-      getFunds(),
-      getClients(),
+      getReportOverview({ accessToken: auth.accessToken, periodType, periodValue, fundId: fundId ? Number(fundId) : undefined, clientId: clientId ? Number(clientId) : undefined }),
+      getFunds(1, 50, auth.accessToken),
+      getClients({ accessToken: auth.accessToken }),
     ]);
 
-    return { props: { report, funds: fundData.items ?? [], clients: clientData.items ?? [], filters: { periodType, periodValue, fundId, clientId } } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, report, funds: fundData.items ?? [], clients: clientData.items ?? [], filters: { periodType, periodValue, fundId, clientId } } };
   } catch (error) {
     return {
-      props: {
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, 
         report: null,
         funds: [],
         clients: [],

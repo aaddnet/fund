@@ -21,9 +21,12 @@ from app.services.auth import (
     apply_client_scope_filters,
     get_actor,
     login_with_password,
+    refresh_access_token,
     require_client_scope,
+    require_permissions,
     require_roles,
     revoke_session,
+    permissions_for_role,
 )
 from app.services.exchange_rate import fetch_and_save_rates
 from app.services.fee_service import calc_fee, list_fees
@@ -42,12 +45,13 @@ MAX_SIZE = 200
 @router.post("/auth/login")
 def auth_login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     session = login_with_password(db, username=username, password=password)
-    return {
-        "access_token": session.token,
-        "token_type": "bearer",
-        "expires_at": session.expires_at.isoformat(),
-        "user": _serialize_auth_user(session.user),
-    }
+    return _serialize_auth_session(session)
+
+
+@router.post("/auth/refresh")
+def auth_refresh(refresh_token: str = Form(...), db: Session = Depends(get_db)):
+    session = refresh_access_token(db, refresh_token=refresh_token)
+    return _serialize_auth_session(session)
 
 
 @router.get("/auth/me")
@@ -61,6 +65,7 @@ def auth_me(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
             "auth_mode": actor.auth_mode,
             "session_id": actor.session_id,
             "username": actor.username,
+            "permissions": list(actor.permissions),
         },
         "user": _serialize_auth_user(user) if user else None,
     }
@@ -76,7 +81,7 @@ def auth_logout(response: Response, actor: Actor = Depends(get_actor), db: Sessi
 
 @router.post("/rates/fetch")
 def fetch_rates(req: RateFetchRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "rates.write")
     row = fetch_and_save_rates(db, req.base, req.quote, req.snapshot_date)
     record_audit(
         db,
@@ -99,7 +104,7 @@ def get_rates(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "rates.read")
     query = db.query(ExchangeRate)
     if snapshot_date is not None:
         query = query.filter(ExchangeRate.snapshot_date == snapshot_date)
@@ -112,7 +117,7 @@ def get_rates(
 
 @router.post("/price/fetch")
 def fetch_price(req: PriceFetchRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "price.write")
     rows = fetch_and_save_prices(db, req.assets, req.snapshot_date)
     record_audit(
         db,
@@ -134,7 +139,7 @@ def list_price_records(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "price.read")
     query = db.query(AssetPrice)
     if snapshot_date is not None:
         query = query.filter(AssetPrice.snapshot_date == snapshot_date)
@@ -145,7 +150,7 @@ def list_price_records(
 
 @router.post("/nav/calc")
 def run_nav(req: NavCalcRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "nav.write")
     try:
         row = calc_nav(db, req.fund_id, req.nav_date)
         record_audit(
@@ -171,7 +176,7 @@ def get_nav_records(fund_id: Optional[int] = None, db: Session = Depends(get_db)
 
 @router.post("/share/subscribe")
 def sub(req: ShareRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "shares.write")
     try:
         payload = subscribe(db, req.fund_id, req.client_id, req.tx_date, req.amount_usd)
         record_audit(
@@ -189,7 +194,7 @@ def sub(req: ShareRequest, db: Session = Depends(get_db), actor: Actor = Depends
 
 @router.post("/share/redeem")
 def red(req: ShareRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "shares.write")
     try:
         payload = redeem(db, req.fund_id, req.client_id, req.tx_date, req.amount_usd)
         record_audit(
@@ -778,12 +783,27 @@ def _serialize_auth_user(item: Optional[AuthUser]) -> Optional[dict]:
         "id": item.id,
         "username": item.username,
         "role": item.role,
+        "permissions": list(permissions_for_role(item.role)),
         "client_scope_id": item.client_scope_id,
         "display_name": item.display_name,
         "is_active": item.is_active,
         "last_login_at": _iso(item.last_login_at),
+        "password_changed_at": _iso(item.password_changed_at),
+        "failed_login_attempts": item.failed_login_attempts,
+        "locked_until": _iso(item.locked_until),
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
+    }
+
+
+def _serialize_auth_session(session) -> dict:
+    return {
+        "access_token": session.access_token,
+        "refresh_token": session.refresh_token,
+        "token_type": "bearer",
+        "expires_at": session.access_expires_at.isoformat(),
+        "refresh_expires_at": session.refresh_expires_at.isoformat(),
+        "user": _serialize_auth_user(session.user),
     }
 
 

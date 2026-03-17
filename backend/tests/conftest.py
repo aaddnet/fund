@@ -16,9 +16,10 @@ os.environ["SCHEDULER_ENABLED"] = "false"
 os.environ["AUTH_MODE"] = "token"
 os.environ["AUTH_ALLOW_DEV_FALLBACK"] = "false"
 os.environ["AUTH_BOOTSTRAP_USERS_JSON"] = (
-    '[{"username":"admin","password":"admin123","role":"admin"},'
-    '{"username":"ops","password":"ops123","role":"ops"},'
-    '{"username":"client1","password":"client123","role":"client-readonly","client_scope_id":1}]'
+    '[{"username":"admin","password":"Admin12345","role":"admin"},'
+    '{"username":"ops","password":"Ops1234567","role":"ops"},'
+    '{"username":"viewer","password":"Viewer12345","role":"ops-readonly"},'
+    '{"username":"client1","password":"Client12345","role":"client-readonly","client_scope_id":1}]'
 )
 
 from app.db import SessionLocal  # noqa: E402
@@ -64,14 +65,14 @@ def seeded_db(client):
 
 @pytest.fixture()
 def ops_token(client):
-    response = client.post("/auth/login", data={"username": "ops", "password": "ops123"})
+    response = client.post("/auth/login", data={"username": "ops", "password": "Ops1234567"})
     assert response.status_code == 200
     return response.json()["access_token"]
 
 
 @pytest.fixture()
 def client_token(client, seeded_db):
-    response = client.post("/auth/login", data={"username": "client1", "password": "client123"})
+    response = client.post("/auth/login", data={"username": "client1", "password": "Client12345"})
     assert response.status_code == 200
     return response.json()["access_token"]
 

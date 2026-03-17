@@ -14,6 +14,7 @@ import {
   getShareBalances,
   getShareHistory,
 } from '../lib/api';
+import { requirePageAuth } from '../lib/pageAuth';
 import { colors, formatNumber, styles } from '../lib/ui';
 
 type Props = {
@@ -177,11 +178,16 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
   );
 }
 
-export async function getServerSideProps() {
+export async function getServerSideProps(context: any) {
+  const auth = await requirePageAuth(context);
+  if ('redirect' in auth) {
+    return auth;
+  }
+
   try {
-    const [shares, balances, fundData, clientData] = await Promise.all([getShareHistory(), getShareBalances(), getFunds(), getClients()]);
-    return { props: { shares, balances, funds: fundData.items ?? [], clients: clientData.items ?? [] } };
+    const [shares, balances, fundData, clientData] = await Promise.all([getShareHistory({ accessToken: auth.accessToken }), getShareBalances({ accessToken: auth.accessToken }), getFunds(1, 50, auth.accessToken), getClients({ accessToken: auth.accessToken })]);
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, shares, balances, funds: fundData.items ?? [], clients: clientData.items ?? [] } };
   } catch (error) {
-    return { props: { shares: [], balances: [], funds: [], clients: [], error: error instanceof Error ? error.message : 'unknown error' } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, shares: [], balances: [], funds: [], clients: [], error: error instanceof Error ? error.message : 'unknown error' } };
   }
 }

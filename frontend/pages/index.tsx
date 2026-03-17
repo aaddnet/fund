@@ -1,6 +1,7 @@
 import Layout from '../components/Layout';
 import StatCard from '../components/StatCard';
 import { API_BASE } from '../lib/api';
+import { requirePageAuth } from '../lib/pageAuth';
 import { styles } from '../lib/ui';
 
 export default function Home() {
@@ -24,4 +25,9 @@ export default function Home() {
       </div>
     </Layout>
   );
+}
+
+export async function getServerSideProps(context: any) {
+  const auth = await requirePageAuth(context);
+  return 'redirect' in auth ? auth : { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale } };
 }

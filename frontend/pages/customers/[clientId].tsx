@@ -2,6 +2,7 @@ import Link from 'next/link';
 import Layout from '../../components/Layout';
 import ProductTable from '../../components/ProductTable';
 import { Client, CustomerView, getClients, getCustomerView } from '../../lib/api';
+import { requirePageAuth } from '../../lib/pageAuth';
 import { colors, formatNumber, styles } from '../../lib/ui';
 
 type Props = {
@@ -91,20 +92,25 @@ export default function Page({ customer, clients, selectedClientId, error }: Pro
   );
 }
 
-export async function getServerSideProps(context: { params?: Record<string, string | string[] | undefined> }) {
+export async function getServerSideProps(context: any) {
   const clientIdText = typeof context.params?.clientId === 'string' ? context.params.clientId : '';
   const selectedClientId = clientIdText ? Number(clientIdText) : null;
 
+  const auth = await requirePageAuth(context);
+  if ('redirect' in auth) {
+    return auth;
+  }
+
   try {
-    const clientData = await getClients();
+    const clientData = await getClients({ accessToken: auth.accessToken });
     const clients = clientData.items ?? [];
     const resolvedClientId = selectedClientId ?? clients[0]?.id ?? null;
-    const customer = resolvedClientId ? await getCustomerView(resolvedClientId) : null;
+    const customer = resolvedClientId ? await getCustomerView(resolvedClientId, auth.accessToken) : null;
 
-    return { props: { customer, clients, selectedClientId: resolvedClientId } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, customer, clients, selectedClientId: resolvedClientId } };
   } catch (error) {
     return {
-      props: {
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, 
         customer: null,
         clients: [],
         selectedClientId,

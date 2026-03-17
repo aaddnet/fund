@@ -1,4 +1,34 @@
+import type { GetServerSidePropsContext } from 'next';
+
 const API_BASE = process.env.NEXT_PUBLIC_API || 'http://127.0.0.1:8000';
+const ACCESS_TOKEN_COOKIE = 'invest_access_token';
+const REFRESH_TOKEN_COOKIE = 'invest_refresh_token';
+const LOCALE_COOKIE = 'invest_locale';
+
+export type Locale = 'en' | 'zh';
+
+export type AuthUser = {
+  id: number;
+  username: string;
+  role: string;
+  permissions: string[];
+  client_scope_id?: number | null;
+  display_name?: string | null;
+  is_active: boolean;
+  last_login_at?: string | null;
+  password_changed_at?: string | null;
+  failed_login_attempts?: number;
+  locked_until?: string | null;
+};
+
+export type AuthSessionResponse = {
+  access_token: string;
+  refresh_token: string;
+  token_type: 'bearer';
+  expires_at: string;
+  refresh_expires_at: string;
+  user: AuthUser;
+};
 
 type Pagination = {
   page: number;
@@ -169,17 +199,74 @@ export type ReportOverview = {
   transactions: Transaction[];
 };
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+type FetchOptions = RequestInit & {
+  accessToken?: string | null;
+};
+
+function parseCookieString(cookieHeader: string | undefined): Record<string, string> {
+  return (cookieHeader || '').split(';').reduce<Record<string, string>>((acc, item) => {
+    const [key, ...rest] = item.trim().split('=');
+    if (!key) return acc;
+    acc[key] = decodeURIComponent(rest.join('='));
+    return acc;
+  }, {});
+}
+
+export function getServerAccessToken(context?: GetServerSidePropsContext): string | null {
+  return parseCookieString(context?.req?.headers?.cookie)[ACCESS_TOKEN_COOKIE] || null;
+}
+
+export function getServerRefreshToken(context?: GetServerSidePropsContext): string | null {
+  return parseCookieString(context?.req?.headers?.cookie)[REFRESH_TOKEN_COOKIE] || null;
+}
+
+export function getServerLocale(context?: GetServerSidePropsContext): Locale {
+  const locale = parseCookieString(context?.req?.headers?.cookie)[LOCALE_COOKIE];
+  return locale === 'zh' ? 'zh' : 'en';
+}
+
+function getBrowserAccessToken(): string | null {
+  if (typeof document === 'undefined') return null;
+  return parseCookieString(document.cookie)[ACCESS_TOKEN_COOKIE] || null;
+}
+
+function getAuthHeader(accessToken?: string | null): string | null {
+  const resolved = accessToken ?? getBrowserAccessToken();
+  return resolved ? `Bearer ${resolved}` : null;
+}
+
+async function fetchJson<T>(path: string, init?: FetchOptions): Promise<T> {
   const headers = new Headers(init?.headers || {});
   const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   if (!isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
+  const authorization = getAuthHeader(init?.accessToken);
+  if (authorization && !headers.has('Authorization')) {
+    headers.set('Authorization', authorization);
+  }
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  let response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers,
   });
+
+  if (response.status === 401 && typeof window !== 'undefined' && !init?.accessToken && path !== '/auth/login' && path !== '/auth/refresh') {
+    const refreshToken = parseCookieString(document.cookie)[REFRESH_TOKEN_COOKIE];
+    if (refreshToken) {
+      try {
+        const nextSession = await refreshSession(refreshToken);
+        persistSessionCookies(nextSession);
+        headers.set('Authorization', `Bearer ${nextSession.access_token}`);
+        response = await fetch(`${API_BASE}${path}`, {
+          ...init,
+          headers,
+        });
+      } catch {
+        clearSessionCookies();
+      }
+    }
+  }
 
   if (!response.ok) {
     let message = `API ${path} failed with ${response.status}`;
@@ -192,7 +279,13 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
         message = text;
       }
     }
-    throw new Error(message);
+    const error = new Error(message) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
   return response.json();
 }
@@ -208,72 +301,129 @@ function buildQuery(params: Record<string, string | number | null | undefined>) 
   return suffix ? `?${suffix}` : '';
 }
 
-export async function getHealth() {
-  return fetchJson<{ status: string }>('/health');
+export async function login(payload: { username: string; password: string }) {
+  const formData = new URLSearchParams();
+  formData.set('username', payload.username);
+  formData.set('password', payload.password);
+  return fetchJson<AuthSessionResponse>('/auth/login', {
+    method: 'POST',
+    body: formData,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
 }
 
-export async function getHealthDb() {
-  return fetchJson<{ db: string }>('/health/db');
+export async function refreshSession(refreshToken: string) {
+  const formData = new URLSearchParams();
+  formData.set('refresh_token', refreshToken);
+  return fetchJson<AuthSessionResponse>('/auth/refresh', {
+    method: 'POST',
+    body: formData,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
 }
 
-export async function getNav(fundId?: number) {
-  return fetchJson<NavRecord[]>(`/nav${buildQuery({ fund_id: fundId })}`);
+export async function getMe(accessToken?: string | null) {
+  return fetchJson<{ actor: { role: string; operator_id: string; client_scope_id?: number | null; auth_mode: string; session_id?: number | null; username?: string | null; permissions: string[] }; user: AuthUser | null }>('/auth/me', { accessToken });
 }
 
-export async function getShareHistory(params?: { fundId?: number; clientId?: number; txType?: string; dateFrom?: string; dateTo?: string }) {
-  return fetchJson<ShareTransaction[]>(`/share/history${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId, tx_type: params?.txType, date_from: params?.dateFrom, date_to: params?.dateTo })}`);
+export async function logout(accessToken?: string | null) {
+  return fetchJson<void>('/auth/logout', {
+    method: 'POST',
+    accessToken,
+  });
 }
 
-export async function getShareBalances(params?: { fundId?: number; clientId?: number }) {
-  return fetchJson<ShareBalance[]>(`/share/balances${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId })}`);
+export function buildSessionCookies(session: AuthSessionResponse) {
+  return [
+    `${ACCESS_TOKEN_COOKIE}=${encodeURIComponent(session.access_token)}; path=/; SameSite=Lax`,
+    `${REFRESH_TOKEN_COOKIE}=${encodeURIComponent(session.refresh_token)}; path=/; SameSite=Lax`,
+  ];
 }
 
-export async function getFees() {
-  return fetchJson<FeeRecord[]>('/fee');
+export function clearSessionCookies() {
+  if (typeof document === 'undefined') return;
+  document.cookie = `${ACCESS_TOKEN_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax`;
+  document.cookie = `${REFRESH_TOKEN_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax`;
 }
 
-export async function getImportBatches() {
-  return fetchJson<ImportBatch[]>('/import');
+export function persistSessionCookies(session: AuthSessionResponse) {
+  if (typeof document === 'undefined') return;
+  buildSessionCookies(session).forEach((cookie) => {
+    document.cookie = cookie;
+  });
 }
 
-export async function getImportBatch(batchId: number) {
-  return fetchJson<ImportBatch>(`/import/${batchId}`);
+export function persistLocaleCookie(locale: Locale) {
+  if (typeof document === 'undefined') return;
+  document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; SameSite=Lax`;
 }
 
-export async function getFunds(page = 1, size = 50) {
-  return fetchJson<ApiListResponse<Fund>>(`/fund${buildQuery({ page, size })}`);
+export async function getHealth(accessToken?: string | null) {
+  return fetchJson<{ status: string }>('/health', { accessToken });
 }
 
-export async function getClients(params?: { page?: number; size?: number; fundId?: number; q?: string }) {
-  return fetchJson<ApiListResponse<Client>>(`/client${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, q: params?.q })}`);
+export async function getHealthDb(accessToken?: string | null) {
+  return fetchJson<{ db: string }>('/health/db', { accessToken });
 }
 
-export async function getClient(clientId: number) {
-  return fetchJson<Client>(`/client/${clientId}`);
+export async function getNav(fundId?: number, accessToken?: string | null) {
+  return fetchJson<NavRecord[]>(`/nav${buildQuery({ fund_id: fundId })}`, { accessToken });
 }
 
-export async function getAccounts(params?: { page?: number; size?: number; fundId?: number; clientId?: number; broker?: string; q?: string }) {
-  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, client_id: params?.clientId, broker: params?.broker, q: params?.q })}`);
+export async function getShareHistory(params?: { fundId?: number; clientId?: number; txType?: string; dateFrom?: string; dateTo?: string; accessToken?: string | null }) {
+  return fetchJson<ShareTransaction[]>(`/share/history${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId, tx_type: params?.txType, date_from: params?.dateFrom, date_to: params?.dateTo })}`, { accessToken: params?.accessToken });
 }
 
-export async function getAccount(accountId: number) {
-  return fetchJson<Account>(`/account/${accountId}`);
+export async function getShareBalances(params?: { fundId?: number; clientId?: number; accessToken?: string | null }) {
+  return fetchJson<ShareBalance[]>(`/share/balances${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId })}`, { accessToken: params?.accessToken });
 }
 
-export async function getPositions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; snapshotDate?: string }) {
-  return fetchJson<ApiListResponse<Position>>(`/position${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`);
+export async function getFees(accessToken?: string | null) {
+  return fetchJson<FeeRecord[]>('/fee', { accessToken });
 }
 
-export async function getTransactions(params?: { page?: number; size?: number; fundId?: number; accountId?: number }) {
-  return fetchJson<ApiListResponse<Transaction>>(`/transaction${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId })}`);
+export async function getImportBatches(accessToken?: string | null) {
+  return fetchJson<ImportBatch[]>('/import', { accessToken });
 }
 
-export async function getCustomerView(clientId: number) {
-  return fetchJson<CustomerView>(`/customer/${clientId}`);
+export async function getImportBatch(batchId: number, accessToken?: string | null) {
+  return fetchJson<ImportBatch>(`/import/${batchId}`, { accessToken });
 }
 
-export async function getReportOverview(params: { periodType: string; periodValue: string; fundId?: number; clientId?: number }) {
-  return fetchJson<ReportOverview>(`/reports/overview${buildQuery({ period_type: params.periodType, period_value: params.periodValue, fund_id: params.fundId, client_id: params.clientId })}`);
+export async function getFunds(page = 1, size = 50, accessToken?: string | null) {
+  return fetchJson<ApiListResponse<Fund>>(`/fund${buildQuery({ page, size })}`, { accessToken });
+}
+
+export async function getClients(params?: { page?: number; size?: number; fundId?: number; q?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<Client>>(`/client${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, q: params?.q })}`, { accessToken: params?.accessToken });
+}
+
+export async function getClient(clientId: number, accessToken?: string | null) {
+  return fetchJson<Client>(`/client/${clientId}`, { accessToken });
+}
+
+export async function getAccounts(params?: { page?: number; size?: number; fundId?: number; clientId?: number; broker?: string; q?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, client_id: params?.clientId, broker: params?.broker, q: params?.q })}`, { accessToken: params?.accessToken });
+}
+
+export async function getAccount(accountId: number, accessToken?: string | null) {
+  return fetchJson<Account>(`/account/${accountId}`, { accessToken });
+}
+
+export async function getPositions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; snapshotDate?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<Position>>(`/position${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`, { accessToken: params?.accessToken });
+}
+
+export async function getTransactions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<Transaction>>(`/transaction${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId })}`, { accessToken: params?.accessToken });
+}
+
+export async function getCustomerView(clientId: number, accessToken?: string | null) {
+  return fetchJson<CustomerView>(`/customer/${clientId}`, { accessToken });
+}
+
+export async function getReportOverview(params: { periodType: string; periodValue: string; fundId?: number; clientId?: number; accessToken?: string | null }) {
+  return fetchJson<ReportOverview>(`/reports/overview${buildQuery({ period_type: params.periodType, period_value: params.periodValue, fund_id: params.fundId, client_id: params.clientId })}`, { accessToken: params.accessToken });
 }
 
 export async function uploadImportBatch(payload: { source: string; accountId: number; file: File }) {
@@ -314,4 +464,4 @@ export async function createShareRedemption(payload: { fund_id: number; client_i
   });
 }
 
-export { API_BASE };
+export { API_BASE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, LOCALE_COOKIE, buildQuery, fetchJson };

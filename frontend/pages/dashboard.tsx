@@ -2,6 +2,7 @@ import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import StatCard from '../components/StatCard';
 import { getAccounts, getFees, getHealth, getHealthDb, getNav, getPositions, getShareHistory, Account, NavRecord, FeeRecord, Position, ShareTransaction } from '../lib/api';
+import { requirePageAuth } from '../lib/pageAuth';
 import { formatNumber, styles } from '../lib/ui';
 
 type Props = {
@@ -113,22 +114,27 @@ export default function Page({ health, db, nav, shares, fees, accounts, position
   );
 }
 
-export async function getServerSideProps() {
+export async function getServerSideProps(context: any) {
+  const auth = await requirePageAuth(context);
+  if ('redirect' in auth) {
+    return auth;
+  }
+
   try {
     const [health, db, nav, shares, fees, accountData, positionData] = await Promise.all([
-      getHealth(),
-      getHealthDb(),
-      getNav(),
-      getShareHistory(),
-      getFees(),
-      getAccounts(),
-      getPositions({ size: 20 }),
+      getHealth(auth.accessToken),
+      getHealthDb(auth.accessToken),
+      getNav(undefined, auth.accessToken),
+      getShareHistory({ accessToken: auth.accessToken }),
+      getFees(auth.accessToken),
+      getAccounts({ accessToken: auth.accessToken }),
+      getPositions({ size: 20, accessToken: auth.accessToken }),
     ]);
 
-    return { props: { health: health.status, db: db.db, nav, shares, fees, accounts: accountData.items ?? [], positions: positionData.items ?? [] } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, health: health.status, db: db.db, nav, shares, fees, accounts: accountData.items ?? [], positions: positionData.items ?? [] } };
   } catch (error) {
     return {
-      props: {
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, 
         health: 'error',
         db: 'error',
         nav: [],

@@ -12,6 +12,10 @@ class Settings:
     auth_allow_dev_fallback: bool = os.getenv("AUTH_ALLOW_DEV_FALLBACK", "true").lower() not in {"0", "false", "no"}
     auth_secret_key: str = os.getenv("AUTH_SECRET_KEY", "change-me-invest-dev-secret")
     auth_token_ttl_hours: int = int(os.getenv("AUTH_TOKEN_TTL_HOURS", "12"))
+    auth_access_token_ttl_minutes: int = int(os.getenv("AUTH_ACCESS_TOKEN_TTL_MINUTES", str(int(os.getenv("AUTH_TOKEN_TTL_HOURS", "12")) * 60)))
+    auth_refresh_token_ttl_days: int = int(os.getenv("AUTH_REFRESH_TOKEN_TTL_DAYS", "14"))
+    auth_lockout_threshold: int = int(os.getenv("AUTH_LOCKOUT_THRESHOLD", "5"))
+    auth_lockout_minutes: int = int(os.getenv("AUTH_LOCKOUT_MINUTES", "15"))
     auth_role_header: str = os.getenv("AUTH_ROLE_HEADER", "x-dev-role")
     auth_client_id_header: str = os.getenv("AUTH_CLIENT_ID_HEADER", "x-client-id")
     auth_operator_header: str = os.getenv("AUTH_OPERATOR_HEADER", "x-operator-id")
@@ -26,9 +30,10 @@ class Settings:
     def __post_init__(self) -> None:
         raw_bootstrap = os.getenv(
             "AUTH_BOOTSTRAP_USERS_JSON",
-            '[{"username":"admin","password":"admin123","role":"admin","display_name":"Admin User"},'
-            '{"username":"ops","password":"ops123","role":"ops","display_name":"Operations User"},'
-            '{"username":"client1","password":"client123","role":"client-readonly","client_scope_id":1,"display_name":"Client Demo"}]',
+            '[{"username":"admin","password":"Admin12345","role":"admin","display_name":"Admin User"},'
+            '{"username":"ops","password":"Ops1234567","role":"ops","display_name":"Operations User"},'
+            '{"username":"client1","password":"Client12345","role":"client-readonly","client_scope_id":1,"display_name":"Client Demo"},'
+            '{"username":"ops.viewer","password":"Viewer12345","role":"ops-readonly","display_name":"Operations Viewer"}]',
         )
         try:
             self.auth_bootstrap_users = json.loads(raw_bootstrap)
