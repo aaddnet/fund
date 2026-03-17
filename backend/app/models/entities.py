@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
+import json
+
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from app.db import Base
 
 
@@ -56,7 +58,21 @@ class ImportBatch(Base, TimestampMixin):
     id = Column(Integer, primary_key=True)
     source = Column(String(50), nullable=False)
     filename = Column(String(255))
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
+    status = Column(String(30), nullable=False, default="uploaded")
+    row_count = Column(Integer, nullable=False, default=0)
+    parsed_count = Column(Integer, nullable=False, default=0)
+    confirmed_count = Column(Integer, nullable=False, default=0)
+    failed_reason = Column(Text)
+    preview_json = Column(Text, nullable=False, default="[]")
     imported_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    @property
+    def preview_rows(self):
+        try:
+            return json.loads(self.preview_json or "[]")
+        except json.JSONDecodeError:
+            return []
 
 
 class Transaction(Base, TimestampMixin):

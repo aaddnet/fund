@@ -5,6 +5,18 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
 WEB_URL="${WEB_URL:-http://127.0.0.1:3000}"
 DB_CONTAINER="${DB_CONTAINER:-fund_system_db}"
 
+TMP_CSV="$(mktemp /tmp/invest-import-XXXXXX.csv)"
+cat > "$TMP_CSV" <<'CSV'
+trade_date,asset_code,quantity,price,currency,tx_type,fee,snapshot_date
+2026-03-31,AAPL,10,200,USD,buy,1,2026-03-31
+2026-03-31,BTC,0.5,80000,USD,buy,2,2026-03-31
+CSV
+
+cleanup() {
+  rm -f "$TMP_CSV"
+}
+trap cleanup EXIT
+
 echo "== Health checks =="
 curl -fsS "$BASE_URL/health" | tee /tmp/invest-health.json && echo
 curl -fsS "$BASE_URL/health/db" | tee /tmp/invest-health-db.json && echo
@@ -29,6 +41,21 @@ VALUES
   ('BTC', 90000, 'seed', DATE '2026-06-30')
 ON CONFLICT (asset_code, snapshot_date) DO NOTHING;
 SQL
+
+echo "== Import flow =="
+curl -fsS -X POST "$BASE_URL/import/upload" \
+  -F "source=csv" \
+  -F "account_id=1" \
+  -F "file=@$TMP_CSV;type=text/csv" | tee /tmp/invest-import-upload.json && echo
+IMPORT_BATCH_ID="$(python3 - <<'PY'
+import json
+with open('/tmp/invest-import-upload.json') as fh:
+    data = json.load(fh)
+print(data['id'])
+PY
+)"
+curl -fsS "$BASE_URL/import/$IMPORT_BATCH_ID" | tee /tmp/invest-import-detail.json && echo
+curl -fsS -X POST "$BASE_URL/import/$IMPORT_BATCH_ID/confirm" | tee /tmp/invest-import-confirm.json && echo
 
 echo "== Business flow =="
 curl -fsS -X POST "$BASE_URL/nav/calc" -H 'Content-Type: application/json' -d '{"fund_id":1,"nav_date":"2026-03-31"}' | tee /tmp/invest-nav1.json && echo

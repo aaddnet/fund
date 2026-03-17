@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 import requests
 from sqlalchemy.orm import Session
 from app.models import ExchangeRate

@@ -39,13 +39,42 @@ export type FeeRecord = {
   fee_amount_usd: number;
 };
 
+export type ImportPreviewRow = {
+  row_number: number;
+  trade_date: string;
+  asset_code: string;
+  quantity: string;
+  price: string;
+  currency: string;
+  tx_type: string;
+  fee: string;
+  snapshot_date: string;
+};
+
+export type ImportBatch = {
+  id: number;
+  source: string;
+  filename: string;
+  account_id: number;
+  status: string;
+  row_count: number;
+  parsed_count: number;
+  confirmed_count: number;
+  failed_reason?: string | null;
+  imported_at?: string | null;
+  preview_rows: ImportPreviewRow[];
+};
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers || {});
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
+  if (!isFormData && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers || {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -73,6 +102,31 @@ export async function getShareHistory() {
 
 export async function getFees() {
   return fetchJson<FeeRecord[]>('/fee');
+}
+
+export async function getImportBatches() {
+  return fetchJson<ImportBatch[]>('/import');
+}
+
+export async function getImportBatch(batchId: number) {
+  return fetchJson<ImportBatch>(`/import/${batchId}`);
+}
+
+export async function uploadImportBatch(payload: { source: string; accountId: number; file: File }) {
+  const formData = new FormData();
+  formData.append('source', payload.source);
+  formData.append('account_id', String(payload.accountId));
+  formData.append('file', payload.file);
+  return fetchJson<ImportBatch>('/import/upload', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export async function confirmImportBatch(batchId: number) {
+  return fetchJson<ImportBatch>(`/import/${batchId}/confirm`, {
+    method: 'POST',
+  });
 }
 
 export async function getPlaceholderResource(path: string) {

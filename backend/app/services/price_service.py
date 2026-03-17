@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 import requests
 import yfinance as yf
 from sqlalchemy.orm import Session

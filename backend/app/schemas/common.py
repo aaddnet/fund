@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from typing import Optional
 from pydantic import BaseModel
 
 
@@ -29,3 +30,7 @@ class ShareRequest(BaseModel):
 class FeeCalcRequest(BaseModel):
     fund_id: int
     fee_date: date
+
+
+class ImportConfirmRequest(BaseModel):
+    batch_id: Optional[int] = None
