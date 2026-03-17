@@ -22,6 +22,8 @@ class Settings:
     auth_cookie_samesite: str = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
     auth_access_cookie_name: str = os.getenv("AUTH_ACCESS_COOKIE_NAME", "invest_access_token")
     auth_refresh_cookie_name: str = os.getenv("AUTH_REFRESH_COOKIE_NAME", "invest_refresh_token")
+    auth_csrf_cookie_name: str = os.getenv("AUTH_CSRF_COOKIE_NAME", "invest_csrf_token")
+    auth_csrf_header_name: str = os.getenv("AUTH_CSRF_HEADER_NAME", "x-csrf-token")
     auth_role_header: str = os.getenv("AUTH_ROLE_HEADER", "x-dev-role")
     auth_client_id_header: str = os.getenv("AUTH_CLIENT_ID_HEADER", "x-client-id")
     auth_operator_header: str = os.getenv("AUTH_OPERATOR_HEADER", "x-operator-id")

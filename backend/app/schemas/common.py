@@ -34,3 +34,28 @@ class FeeCalcRequest(BaseModel):
 
 class ImportConfirmRequest(BaseModel):
     batch_id: Optional[int] = None
+
+
+class AuthUserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+    client_scope_id: Optional[int] = None
+    display_name: Optional[str] = None
+    is_active: bool = True
+
+
+class AuthPasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AuthPasswordResetRequest(BaseModel):
+    new_password: str
+
+
+class AuthUserUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    role: Optional[str] = None
+    client_scope_id: Optional[int] = None
+    is_active: Optional[bool] = None

@@ -116,6 +116,7 @@ class Actor:
     session_id: Optional[int] = None
     username: Optional[str] = None
     permissions: tuple[str, ...] = ()
+    auth_via_cookie: bool = False
 
     @property
     def is_client(self) -> bool:
@@ -131,6 +132,7 @@ class AuthenticatedSession:
     session: AuthSession
     access_token: str
     refresh_token: str
+    csrf_token: str
     access_expires_at: datetime
     refresh_expires_at: datetime
 
@@ -213,8 +215,8 @@ def _ensure_not_locked(user: AuthUser) -> None:
         raise HTTPException(status_code=423, detail=f"account locked until {locked_until.isoformat()}")
 
 
-def _mint_session_tokens() -> tuple[str, str]:
-    return os.urandom(32).hex(), os.urandom(32).hex()
+def _mint_session_tokens() -> tuple[str, str, str]:
+    return os.urandom(32).hex(), os.urandom(32).hex(), os.urandom(24).hex()
 
 
 def _session_reference_time(session: AuthSession) -> datetime:
@@ -245,6 +247,120 @@ def _revoke_user_sessions(db: Session, user_id: int, *, except_session_id: Optio
         session.revoked_at = now
 
 
+def _validate_client_scope(db: Session, role: str, client_scope_id: Optional[int]) -> Optional[int]:
+    if role == ROLE_CLIENT_READONLY and client_scope_id is None:
+        raise HTTPException(status_code=400, detail="client-readonly requires client scope")
+    if client_scope_id is not None:
+        client_exists = db.query(Client.id).filter(Client.id == client_scope_id).first()
+        if not client_exists:
+            raise HTTPException(status_code=400, detail="client scope does not exist")
+    return client_scope_id
+
+
+def list_auth_users(db: Session) -> list[AuthUser]:
+    return db.query(AuthUser).order_by(AuthUser.id.asc()).all()
+
+
+def create_auth_user(
+    db: Session,
+    *,
+    username: str,
+    password: str,
+    role: str,
+    client_scope_id: Optional[int],
+    display_name: Optional[str],
+    is_active: bool,
+) -> AuthUser:
+    normalized_username = username.strip()
+    normalized_role = role.strip().lower()
+    if not normalized_username:
+        raise HTTPException(status_code=400, detail="username is required")
+    if normalized_role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=400, detail="unsupported role")
+    if db.query(AuthUser.id).filter(AuthUser.username == normalized_username).first():
+        raise HTTPException(status_code=409, detail="username already exists")
+
+    user = AuthUser(
+        username=normalized_username,
+        password_hash=hash_password(password),
+        role=normalized_role,
+        client_scope_id=_validate_client_scope(db, normalized_role, client_scope_id),
+        display_name=display_name.strip() if display_name else normalized_username,
+        is_active=bool(is_active),
+        password_changed_at=_utcnow(),
+        failed_login_attempts=0,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def update_auth_user(
+    db: Session,
+    *,
+    user_id: int,
+    role: Optional[str] = None,
+    client_scope_id: Optional[int] = None,
+    display_name: Optional[str] = None,
+    is_active: Optional[bool] = None,
+) -> AuthUser:
+    user = db.query(AuthUser).filter(AuthUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    next_role = user.role if role is None else role.strip().lower()
+    if next_role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=400, detail="unsupported role")
+
+    user.role = next_role
+    if display_name is not None:
+        user.display_name = display_name.strip() or user.username
+    if is_active is not None:
+        user.is_active = bool(is_active)
+    if client_scope_id is not None or next_role == ROLE_CLIENT_READONLY:
+        user.client_scope_id = _validate_client_scope(db, next_role, client_scope_id)
+    elif next_role != ROLE_CLIENT_READONLY:
+        user.client_scope_id = None
+
+    if is_active is False:
+        _revoke_user_sessions(db, user.id)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def change_password(db: Session, *, actor: Actor, current_password: str, new_password: str) -> AuthUser:
+    if actor.user_id is None:
+        raise HTTPException(status_code=400, detail="session user is required")
+    user = db.query(AuthUser).filter(AuthUser.id == actor.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+    if not verify_password(current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="current password is invalid")
+
+    user.password_hash = hash_password(new_password)
+    user.password_changed_at = _utcnow()
+    _clear_failed_login(user)
+    _revoke_user_sessions(db, user.id, except_session_id=actor.session_id)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def admin_reset_password(db: Session, *, user_id: int, new_password: str) -> AuthUser:
+    user = db.query(AuthUser).filter(AuthUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+    user.password_hash = hash_password(new_password)
+    user.password_changed_at = _utcnow()
+    _clear_failed_login(user)
+    _revoke_user_sessions(db, user.id)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def bootstrap_auth_users(db: Session) -> None:
     configured_users = settings.auth_bootstrap_users or []
     for item in configured_users:
@@ -267,7 +383,6 @@ def bootstrap_auth_users(db: Session) -> None:
                 existing.password_changed_at = existing.created_at or _utcnow()
             db.commit()
             continue
-        # 这里保留最小 bootstrap 机制，方便本地和 Docker 联调快速进入系统。
         db.add(
             AuthUser(
                 username=username,
@@ -284,7 +399,7 @@ def bootstrap_auth_users(db: Session) -> None:
 
 
 def _issue_session(db: Session, user: AuthUser) -> AuthenticatedSession:
-    raw_access_token, raw_refresh_token = _mint_session_tokens()
+    raw_access_token, raw_refresh_token, csrf_token = _mint_session_tokens()
     now = _utcnow()
     access_expires_at = now + timedelta(minutes=settings.auth_access_token_ttl_minutes)
     refresh_expires_at = now + timedelta(days=settings.auth_refresh_token_ttl_days)
@@ -307,6 +422,7 @@ def _issue_session(db: Session, user: AuthUser) -> AuthenticatedSession:
         session=session,
         access_token=raw_access_token,
         refresh_token=raw_refresh_token,
+        csrf_token=csrf_token,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
     )
@@ -333,7 +449,6 @@ def login_with_password(db: Session, username: str, password: str) -> Authentica
                     user.client_scope_id = item["client_scope_id"]
                     break
 
-    # 密码登录后主动回收历史 session，减少 refresh token 长驻窗口。
     _revoke_user_sessions(db, user.id)
     db.commit()
     db.refresh(user)
@@ -348,7 +463,7 @@ def revoke_session(db: Session, session_id: int) -> None:
     db.commit()
 
 
-def _build_actor(user: AuthUser, session: AuthSession) -> Actor:
+def _build_actor(user: AuthUser, session: AuthSession, *, auth_via_cookie: bool = False) -> Actor:
     return Actor(
         role=user.role,
         operator_id=user.username,
@@ -358,10 +473,11 @@ def _build_actor(user: AuthUser, session: AuthSession) -> Actor:
         session_id=session.id,
         username=user.username,
         permissions=permissions_for_role(user.role),
+        auth_via_cookie=auth_via_cookie,
     )
 
 
-def authenticate_bearer_token(db: Session, authorization: Optional[str]) -> Optional[Actor]:
+def authenticate_bearer_token(db: Session, authorization: Optional[str], *, auth_via_cookie: bool = False) -> Optional[Actor]:
     if not authorization:
         return None
     scheme, _, token = authorization.partition(" ")
@@ -388,7 +504,7 @@ def authenticate_bearer_token(db: Session, authorization: Optional[str]) -> Opti
 
     session.last_seen_at = now
     db.commit()
-    return _build_actor(user, session)
+    return _build_actor(user, session, auth_via_cookie=auth_via_cookie)
 
 
 def refresh_access_token(db: Session, refresh_token: str) -> AuthenticatedSession:
@@ -416,7 +532,7 @@ def refresh_access_token(db: Session, refresh_token: str) -> AuthenticatedSessio
         raise HTTPException(status_code=401, detail="refresh token expired or revoked")
     _ensure_not_locked(user)
 
-    raw_access_token, raw_refresh_token = _mint_session_tokens()
+    raw_access_token, raw_refresh_token, csrf_token = _mint_session_tokens()
     session.session_token_hash = _hash_session_token(raw_access_token)
     session.refresh_token_hash = _hash_refresh_token(raw_refresh_token)
     session.expires_at = now + timedelta(minutes=settings.auth_access_token_ttl_minutes)
@@ -431,6 +547,7 @@ def refresh_access_token(db: Session, refresh_token: str) -> AuthenticatedSessio
         session=session,
         access_token=raw_access_token,
         refresh_token=raw_refresh_token,
+        csrf_token=csrf_token,
         access_expires_at=_coerce_utc(session.expires_at) or now,
         refresh_expires_at=_coerce_utc(session.refresh_expires_at) or now,
     )
@@ -451,8 +568,10 @@ async def get_actor(
         return Actor(role=ROLE_ADMIN, operator_id="auth-disabled", auth_mode="disabled", permissions=permissions_for_role(ROLE_ADMIN))
 
     if settings.auth_mode in {"token", "session", "hybrid"}:
-        auth_value = authorization or (f"Bearer {access_cookie}" if settings.auth_cookie_enabled and access_cookie else None)
-        actor = authenticate_bearer_token(db, auth_value)
+        if authorization:
+            actor = authenticate_bearer_token(db, authorization, auth_via_cookie=False)
+        else:
+            actor = authenticate_bearer_token(db, f"Bearer {access_cookie}" if settings.auth_cookie_enabled and access_cookie else None, auth_via_cookie=True)
         if actor is not None:
             return actor
         if settings.auth_mode in {"token", "session"} and not settings.auth_allow_dev_fallback:

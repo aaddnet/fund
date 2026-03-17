@@ -5,26 +5,41 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_db
 from app.models import Account, AssetPrice, AuthUser, Client, ExchangeRate, FeeRecord, Fund, NAVRecord, Position, Transaction
-from app.schemas.common import FeeCalcRequest, NavCalcRequest, PriceFetchRequest, RateFetchRequest, ShareRequest
+from app.schemas.common import (
+    AuthPasswordChangeRequest,
+    AuthPasswordResetRequest,
+    AuthUserCreateRequest,
+    AuthUserUpdateRequest,
+    FeeCalcRequest,
+    NavCalcRequest,
+    PriceFetchRequest,
+    RateFetchRequest,
+    ShareRequest,
+)
 from app.services.audit import list_audit_logs, record_audit
 from app.services.auth import (
     ROLE_CLIENT_READONLY,
     Actor,
+    admin_reset_password,
     apply_client_scope_filters,
+    change_password,
+    create_auth_user,
     get_actor,
+    list_auth_users,
     login_with_password,
     refresh_access_token,
     require_client_scope,
     require_permissions,
     require_roles,
     revoke_session,
+    update_auth_user,
     permissions_for_role,
 )
 from app.services.exchange_rate import fetch_and_save_rates
@@ -37,6 +52,7 @@ from app.services.share_service import balances, history, redeem, subscribe
 
 router = APIRouter()
 DEFAULT_PAGE = 1
+UNSAFE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 DEFAULT_SIZE = 20
 MAX_SIZE = 200
 
@@ -58,6 +74,11 @@ def auth_refresh(request: Request, response: Response, refresh_token: Optional[s
     payload = _serialize_auth_session(session)
     _set_auth_cookies(response, session)
     return payload
+
+
+@router.get("/auth/csrf")
+def auth_csrf():
+    return {"header_name": settings.auth_csrf_header_name, "cookie_name": settings.auth_csrf_cookie_name}
 
 
 @router.get("/auth/me")
@@ -84,6 +105,58 @@ def auth_logout(response: Response, actor: Actor = Depends(get_actor), db: Sessi
     _clear_auth_cookies(response)
     response.status_code = 204
     return response
+
+
+@router.get("/auth/users")
+def auth_user_list(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    return [_serialize_auth_user(item) for item in list_auth_users(db)]
+
+
+@router.post("/auth/users")
+def auth_user_create(req: AuthUserCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    user = create_auth_user(
+        db,
+        username=req.username,
+        password=req.password,
+        role=req.role,
+        client_scope_id=req.client_scope_id,
+        display_name=req.display_name,
+        is_active=req.is_active,
+    )
+    record_audit(db, actor, action="auth.user.create", entity_type="auth_user", entity_id=str(user.id), detail={"username": user.username, "role": user.role})
+    return _serialize_auth_user(user)
+
+
+@router.patch("/auth/users/{user_id}")
+def auth_user_update(user_id: int, req: AuthUserUpdateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    user = update_auth_user(
+        db,
+        user_id=user_id,
+        role=req.role,
+        client_scope_id=req.client_scope_id,
+        display_name=req.display_name,
+        is_active=req.is_active,
+    )
+    record_audit(db, actor, action="auth.user.update", entity_type="auth_user", entity_id=str(user.id), detail={"username": user.username, "role": user.role, "is_active": user.is_active})
+    return _serialize_auth_user(user)
+
+
+@router.post("/auth/change-password")
+def auth_change_password(req: AuthPasswordChangeRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    user = change_password(db, actor=actor, current_password=req.current_password, new_password=req.new_password)
+    record_audit(db, actor, action="auth.password.change", entity_type="auth_user", entity_id=str(user.id), detail={"username": user.username})
+    return {"status": "ok", "user": _serialize_auth_user(user)}
+
+
+@router.post("/auth/users/{user_id}/reset-password")
+def auth_user_reset_password(user_id: int, req: AuthPasswordResetRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    user = admin_reset_password(db, user_id=user_id, new_password=req.new_password)
+    record_audit(db, actor, action="auth.password.reset", entity_type="auth_user", entity_id=str(user.id), detail={"username": user.username})
+    return {"status": "ok", "user": _serialize_auth_user(user)}
 
 
 @router.post("/rates/fetch")
@@ -822,6 +895,7 @@ def _serialize_auth_session(session) -> dict:
     return {
         "access_token": session.access_token,
         "refresh_token": session.refresh_token,
+        "csrf_token": session.csrf_token,
         "token_type": "bearer",
         "expires_at": session.access_expires_at.isoformat(),
         "refresh_expires_at": session.refresh_expires_at.isoformat(),
@@ -833,7 +907,6 @@ def _set_auth_cookies(response: Response, session) -> None:
     if not settings.auth_cookie_enabled:
         return
     common = {
-        "httponly": True,
         "secure": settings.auth_cookie_secure,
         "samesite": settings.auth_cookie_samesite,
         "path": "/",
@@ -841,19 +914,28 @@ def _set_auth_cookies(response: Response, session) -> None:
     response.set_cookie(
         key=settings.auth_access_cookie_name,
         value=session.access_token,
+        httponly=True,
         max_age=max(settings.auth_access_token_ttl_minutes * 60, 0),
         **common,
     )
     response.set_cookie(
         key=settings.auth_refresh_cookie_name,
         value=session.refresh_token,
+        httponly=True,
+        max_age=max(settings.auth_refresh_token_ttl_days * 24 * 60 * 60, 0),
+        **common,
+    )
+    response.set_cookie(
+        key=settings.auth_csrf_cookie_name,
+        value=session.csrf_token,
+        httponly=False,
         max_age=max(settings.auth_refresh_token_ttl_days * 24 * 60 * 60, 0),
         **common,
     )
 
 
 def _clear_auth_cookies(response: Response) -> None:
-    for cookie_name in (settings.auth_access_cookie_name, settings.auth_refresh_cookie_name):
+    for cookie_name in (settings.auth_access_cookie_name, settings.auth_refresh_cookie_name, settings.auth_csrf_cookie_name):
         response.delete_cookie(cookie_name, path="/")
 
 
