@@ -16,6 +16,7 @@ type AuthState = {
   signIn: (payload: { username: string; password: string }) => Promise<void>;
   signOut: () => Promise<void>;
   refresh: () => Promise<boolean>;
+  hasPermission: (...required: string[]) => boolean;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -110,9 +111,14 @@ export function AuthProvider({ children, initialUser }: { children: ReactNode; i
     await router.replace('/login');
   }, [router]);
 
+  const hasPermission = useCallback((...required: string[]) => {
+    if (required.length === 0) return true;
+    return required.every((permission) => permissions.includes(permission));
+  }, [permissions]);
+
   const value = useMemo<AuthState>(
-    () => ({ user, permissions, ready, error, signIn, signOut, refresh }),
-    [user, permissions, ready, error, signIn, signOut, refresh],
+    () => ({ user, permissions, ready, error, signIn, signOut, refresh, hasPermission }),
+    [user, permissions, ready, error, signIn, signOut, refresh, hasPermission],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

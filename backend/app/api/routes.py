@@ -14,9 +14,7 @@ from app.models import Account, AssetPrice, AuthUser, Client, ExchangeRate, FeeR
 from app.schemas.common import FeeCalcRequest, NavCalcRequest, PriceFetchRequest, RateFetchRequest, ShareRequest
 from app.services.audit import list_audit_logs, record_audit
 from app.services.auth import (
-    ROLE_ADMIN,
     ROLE_CLIENT_READONLY,
-    ROLE_OPS,
     Actor,
     apply_client_scope_filters,
     get_actor,
@@ -168,6 +166,7 @@ def run_nav(req: NavCalcRequest, db: Session = Depends(get_db), actor: Actor = D
 
 @router.get("/nav")
 def get_nav_records(fund_id: Optional[int] = None, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "nav.read")
     if actor.role == ROLE_CLIENT_READONLY and fund_id is None:
         fund_ids = _client_fund_ids(db, actor.client_scope_id)
         return [_serialize_nav(item) for item in list_nav(db) if item.fund_id in fund_ids]
@@ -220,6 +219,7 @@ def share_history(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
+    require_permissions(actor, "shares.read")
     fund_id, client_id = apply_client_scope_filters(actor, fund_id, client_id)
     return history(db, fund_id=fund_id, client_id=client_id, tx_type=tx_type, date_from=date_from, date_to=date_to)
 
@@ -231,13 +231,14 @@ def share_balances(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
+    require_permissions(actor, "shares.read")
     fund_id, client_id = apply_client_scope_filters(actor, fund_id, client_id)
     return balances(db, fund_id=fund_id, client_id=client_id)
 
 
 @router.post("/fee/calc")
 def fee(req: FeeCalcRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "fees.write")
     try:
         payload = calc_fee(db, req.fund_id, req.fee_date)
         record_audit(
@@ -255,19 +256,19 @@ def fee(req: FeeCalcRequest, db: Session = Depends(get_db), actor: Actor = Depen
 
 @router.get("/fee")
 def fee_list(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "fees.read")
     return list_fees(db)
 
 
 @router.get("/import")
 def get_import_batches(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "import.read")
     return [serialize_batch(batch) for batch in list_batches(db)]
 
 
 @router.get("/import/{batch_id}")
 def get_import_batch(batch_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "import.read")
     batch = get_batch(db, batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Import batch not found.")
@@ -282,7 +283,7 @@ async def upload_import_batch(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "import.write")
     try:
         payload = await file.read()
         batch = upload_csv(db, source=source, filename=file.filename or "upload.csv", account_id=account_id, content=payload)
@@ -301,7 +302,7 @@ async def upload_import_batch(
 
 @router.post("/import/{batch_id}/confirm")
 def confirm_import_batch(batch_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "import.write")
     try:
         batch = confirm_batch(db, batch_id)
         record_audit(
@@ -324,6 +325,7 @@ def list_funds(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
+    require_permissions(actor, "nav.read")
     query = db.query(Fund)
     if actor.role == ROLE_CLIENT_READONLY:
         fund_ids = _client_fund_ids(db, actor.client_scope_id)
@@ -333,6 +335,7 @@ def list_funds(
 
 @router.get("/fund/{fund_id}")
 def get_fund(fund_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "nav.read")
     if actor.role == ROLE_CLIENT_READONLY and fund_id not in _client_fund_ids(db, actor.client_scope_id):
         raise HTTPException(status_code=403, detail="fund scope mismatch")
     item = db.query(Fund).filter(Fund.id == fund_id).first()
@@ -350,6 +353,7 @@ def list_clients(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
+    require_permissions(actor, "clients.read")
     query = db.query(Client)
     if actor.role == ROLE_CLIENT_READONLY:
         query = query.filter(Client.id == actor.client_scope_id)
@@ -363,6 +367,7 @@ def list_clients(
 
 @router.get("/client/{client_id}")
 def get_client(client_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.read")
     require_client_scope(actor, client_id)
     item = db.query(Client).filter(Client.id == client_id).first()
     if not item:
@@ -381,6 +386,7 @@ def list_accounts(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
+    require_permissions(actor, "accounts.read")
     fund_id, client_id = apply_client_scope_filters(actor, fund_id, client_id)
     query = db.query(Account)
     if fund_id is not None:
@@ -397,6 +403,7 @@ def list_accounts(
 
 @router.get("/account/{account_id}")
 def get_account(account_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "accounts.read")
     item = db.query(Account).filter(Account.id == account_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Account not found.")
@@ -415,6 +422,7 @@ def list_positions(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
+    require_permissions(actor, "accounts.read")
     query = db.query(Position)
     if fund_id is not None:
         query = query.join(Account, Account.id == Position.account_id).filter(Account.fund_id == fund_id)
@@ -434,6 +442,7 @@ def list_positions(
 
 @router.get("/position/{position_id}")
 def get_position(position_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "accounts.read")
     item = db.query(Position).filter(Position.id == position_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Position not found.")
@@ -454,6 +463,7 @@ def list_transactions(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
+    require_permissions(actor, "accounts.read")
     query = db.query(Transaction)
     if fund_id is not None:
         query = query.join(Account, Account.id == Transaction.account_id).filter(Account.fund_id == fund_id)
@@ -473,6 +483,7 @@ def list_transactions(
 
 @router.get("/transaction/{transaction_id}")
 def get_transaction(transaction_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "accounts.read")
     item = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Transaction not found.")
@@ -484,6 +495,7 @@ def get_transaction(transaction_id: int, db: Session = Depends(get_db), actor: A
 
 @router.get("/customer/{client_id}")
 def get_customer_view(client_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "customer.read")
     require_client_scope(actor, client_id)
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
@@ -515,6 +527,7 @@ def get_reports_overview(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
+    require_permissions(actor, "reports.read")
     fund_id, client_id = apply_client_scope_filters(actor, fund_id, client_id)
     start_date, end_date = _resolve_period(period_type, period_value)
 
@@ -581,7 +594,7 @@ def get_audit(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS, ROLE_CLIENT_READONLY)
+    require_permissions(actor, "audit.read")
     client_scope_id = actor.client_scope_id if actor.role == ROLE_CLIENT_READONLY else None
     return list_audit_logs(db, limit=limit, action=action, client_scope_id=client_scope_id)
 
@@ -593,13 +606,13 @@ def get_scheduler_runs(
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "scheduler.read")
     return list_job_runs(db, limit=limit, job_name=job_name)
 
 
 @router.post("/scheduler/jobs/fx-weekly/run")
 def trigger_scheduler_job(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_roles(actor, ROLE_ADMIN, ROLE_OPS)
+    require_permissions(actor, "scheduler.run")
     payload = run_weekly_fx_job(trigger_source="manual")
     record_audit(
         db,

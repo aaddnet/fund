@@ -9,8 +9,8 @@ import { colors, styles } from '../lib/ui';
 export default function LoginPage() {
   const { signIn } = useAuth();
   const { locale, setLocale, t } = useI18n();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('ops');
+  const [password, setPassword] = useState('Ops1234567');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -27,7 +27,7 @@ export default function LoginPage() {
     try {
       await signIn({ username, password });
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : 'Login failed');
+      setError(loginError instanceof Error ? loginError.message : t('authRequired'));
     } finally {
       setSubmitting(false);
     }

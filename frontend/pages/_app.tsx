@@ -2,7 +2,7 @@ import type { AppProps } from 'next/app';
 import type { ReactNode } from 'react';
 import { useRouter } from 'next/router';
 import { AuthProvider, useAuth } from '../lib/auth';
-import { I18nProvider } from '../lib/i18n';
+import { I18nProvider, useI18n } from '../lib/i18n';
 import { styles } from '../lib/ui';
 
 const PUBLIC_ROUTES = new Set(['/login', '/auth/complete']);
@@ -10,11 +10,12 @@ const PUBLIC_ROUTES = new Set(['/login', '/auth/complete']);
 function RouteGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { ready, user } = useAuth();
+  const { t } = useI18n();
 
   if (!ready) {
     return (
       <div style={{ ...styles.page, display: 'grid', placeItems: 'center' }}>
-        <div style={styles.card}>Loading session...</div>
+        <div style={styles.card}>{t('loadingSession')}</div>
       </div>
     );
   }

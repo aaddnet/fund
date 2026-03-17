@@ -115,3 +115,17 @@ def test_viewer_can_read_but_cannot_write(client, seeded_db):
     write_response = client.post("/share/subscribe", headers=headers, json={"fund_id": 1, "client_id": 1, "tx_date": "2026-06-30", "amount_usd": "50"})
     assert write_response.status_code == 403
     assert "missing permissions" in write_response.json()["detail"]
+
+
+
+def test_supporting_permissions_guard_core_read_endpoints(client, seeded_db):
+    login_response = client.post("/auth/login", data={"username": "viewer", "password": "Viewer12345"})
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    assert client.get("/account", headers=headers).status_code == 200
+    assert client.get("/client", headers=headers).status_code == 200
+    assert client.get("/reports/overview", headers=headers, params={"period_value": "2026-Q2"}).status_code == 200
+    assert client.get("/import", headers=headers).status_code == 200
+    assert client.get("/audit", headers=headers).status_code == 403
+    assert client.post("/scheduler/jobs/fx-weekly/run", headers=headers).status_code == 403
