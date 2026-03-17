@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from datetime import date
+from calendar import monthrange
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, AssetPrice, Client, ExchangeRate, Fund, Position, Transaction
+from app.models import Account, AssetPrice, Client, ExchangeRate, FeeRecord, Fund, NAVRecord, Position, Transaction
 from app.schemas.common import FeeCalcRequest, NavCalcRequest, PriceFetchRequest, RateFetchRequest, ShareRequest
 from app.services.exchange_rate import fetch_and_save_rates
 from app.services.fee_service import calc_fee, list_fees
@@ -187,10 +188,17 @@ def get_fund(fund_id: int, db: Session = Depends(get_db)):
 def list_clients(
     page: int = Query(DEFAULT_PAGE, ge=1),
     size: int = Query(DEFAULT_SIZE, ge=1, le=MAX_SIZE),
+    fund_id: Optional[int] = None,
+    q: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(Client)
-    return _paginate(query.order_by(Client.id.asc()), page, size, _serialize_client)
+    if fund_id is not None:
+        query = query.join(Account, Account.client_id == Client.id).filter(Account.fund_id == fund_id).distinct()
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter((Client.name.ilike(like)) | (Client.email.ilike(like)))
+    return _paginate(query.order_by(Client.id.asc()), page, size, lambda item: _serialize_client(db, item))
 
 
 @router.get("/client/{client_id}")
@@ -198,7 +206,7 @@ def get_client(client_id: int, db: Session = Depends(get_db)):
     item = db.query(Client).filter(Client.id == client_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Client not found.")
-    return _serialize_client(item)
+    return _serialize_client(db, item)
 
 
 @router.get("/account")
@@ -207,6 +215,8 @@ def list_accounts(
     size: int = Query(DEFAULT_SIZE, ge=1, le=MAX_SIZE),
     fund_id: Optional[int] = None,
     client_id: Optional[int] = None,
+    broker: Optional[str] = None,
+    q: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(Account)
@@ -214,6 +224,11 @@ def list_accounts(
         query = query.filter(Account.fund_id == fund_id)
     if client_id is not None:
         query = query.filter(Account.client_id == client_id)
+    if broker:
+        query = query.filter(Account.broker.ilike(f"%{broker.strip()}%"))
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter((Account.account_no.ilike(like)) | (Account.broker.ilike(like)))
     return _paginate(query.order_by(Account.id.asc()), page, size, lambda item: _serialize_account(db, item))
 
 
@@ -285,6 +300,88 @@ def get_transaction(transaction_id: int, db: Session = Depends(get_db)):
     return _serialize_transaction(item)
 
 
+@router.get("/customer/{client_id}")
+def get_customer_view(client_id: int, db: Session = Depends(get_db)):
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found.")
+
+    account_rows = db.query(Account).filter(Account.client_id == client_id).order_by(Account.id.asc()).all()
+    fund_ids = sorted({account.fund_id for account in account_rows})
+    share_balance_rows = balances(db, client_id=client_id)
+    share_history_rows = history(db, client_id=client_id)
+    nav_rows = [_serialize_nav(item) for item in list_nav(db)]
+    relevant_nav = [row for row in nav_rows if row["fund_id"] in fund_ids]
+
+    return {
+        "client": _serialize_client(db, client),
+        "accounts": [_serialize_account(db, account) for account in account_rows],
+        "share_balances": share_balance_rows,
+        "share_history": share_history_rows,
+        # 只返回客户有关基金的 NAV 历史，保持 customer 视图聚焦且只读。
+        "nav_history": relevant_nav,
+    }
+
+
+@router.get("/reports/overview")
+def get_reports_overview(
+    period_type: str = Query("quarter"),
+    period_value: str = Query(...),
+    fund_id: Optional[int] = None,
+    client_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    start_date, end_date = _resolve_period(period_type, period_value)
+
+    share_rows = history(db, fund_id=fund_id, client_id=client_id, date_from=start_date, date_to=end_date)
+
+    nav_query = db.query(NAVRecord).filter(and_(NAVRecord.nav_date >= start_date, NAVRecord.nav_date <= end_date))
+    if fund_id is not None:
+        nav_query = nav_query.filter(NAVRecord.fund_id == fund_id)
+    nav_rows = [_serialize_nav(item) for item in nav_query.order_by(NAVRecord.nav_date.desc(), NAVRecord.id.desc()).all()]
+
+    fee_query = db.query(FeeRecord).filter(and_(FeeRecord.fee_date >= start_date, FeeRecord.fee_date <= end_date))
+    if fund_id is not None:
+        fee_query = fee_query.filter(FeeRecord.fund_id == fund_id)
+    fee_rows = [_serialize_fee(item) for item in fee_query.order_by(FeeRecord.fee_date.desc(), FeeRecord.id.desc()).all()]
+
+    transaction_query = db.query(Transaction).filter(and_(Transaction.trade_date >= start_date, Transaction.trade_date <= end_date))
+    if fund_id is not None or client_id is not None:
+        transaction_query = transaction_query.join(Account, Account.id == Transaction.account_id)
+        if fund_id is not None:
+            transaction_query = transaction_query.filter(Account.fund_id == fund_id)
+        if client_id is not None:
+            transaction_query = transaction_query.filter(Account.client_id == client_id)
+    transaction_rows = [_serialize_transaction(item) for item in transaction_query.order_by(Transaction.trade_date.desc(), Transaction.id.desc()).all()]
+
+    subscribe_amount = sum(item["amount_usd"] for item in share_rows if item["tx_type"] == "subscribe")
+    redeem_amount = sum(item["amount_usd"] for item in share_rows if item["tx_type"] == "redeem")
+
+    return {
+        "filters": {
+            "period_type": period_type,
+            "period_value": period_value,
+            "date_from": start_date.isoformat(),
+            "date_to": end_date.isoformat(),
+            "fund_id": fund_id,
+            "client_id": client_id,
+        },
+        "summary": {
+            "share_tx_count": len(share_rows),
+            "subscription_amount_usd": subscribe_amount,
+            "redemption_amount_usd": redeem_amount,
+            "net_share_flow_usd": subscribe_amount - redeem_amount,
+            "nav_record_count": len(nav_rows),
+            "fee_record_count": len(fee_rows),
+            "transaction_count": len(transaction_rows),
+        },
+        "share_history": share_rows,
+        "nav_records": nav_rows,
+        "fee_records": fee_rows,
+        "transactions": transaction_rows,
+    }
+
+
 def _paginate(query, page: int, size: int, serializer):
     total = query.order_by(None).count()
     items = query.offset((page - 1) * size).limit(size).all()
@@ -305,11 +402,26 @@ def _serialize_fund(item: Fund) -> dict:
     }
 
 
-def _serialize_client(item: Client) -> dict:
+def _serialize_client(db: Session, item: Client) -> dict:
+    account_rows = db.query(Account).filter(Account.client_id == item.id).all()
+    fund_ids = sorted({account.fund_id for account in account_rows})
+    share_balance_rows = balances(db, client_id=item.id)
+    total_share_balance = sum(row["share_balance"] for row in share_balance_rows)
+    share_history_rows = history(db, client_id=item.id)
+    latest_tx_date = db.query(func.max(Transaction.trade_date)).join(Account, Account.id == Transaction.account_id).filter(Account.client_id == item.id).scalar()
+    latest_share_event_date = share_history_rows[0]["tx_date"] if share_history_rows else None
+
     return {
         "id": item.id,
         "name": item.name,
         "email": item.email,
+        "account_count": len(account_rows),
+        "fund_count": len(fund_ids),
+        "fund_ids": fund_ids,
+        "total_share_balance": total_share_balance,
+        "share_tx_count": len(share_history_rows),
+        "latest_trade_date": latest_tx_date.isoformat() if latest_tx_date else None,
+        "latest_share_tx_date": latest_share_event_date,
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }
@@ -319,15 +431,21 @@ def _serialize_account(db: Session, item: Account) -> dict:
     latest_snapshot_date = db.query(func.max(Position.snapshot_date)).filter(Position.account_id == item.id).scalar()
     position_count = db.query(func.count(Position.id)).filter(Position.account_id == item.id).scalar() or 0
     transaction_count = db.query(func.count(Transaction.id)).filter(Transaction.account_id == item.id).scalar() or 0
+    latest_trade_date = db.query(func.max(Transaction.trade_date)).filter(Transaction.account_id == item.id).scalar()
+    fund = db.query(Fund).filter(Fund.id == item.fund_id).first()
+    client = db.query(Client).filter(Client.id == item.client_id).first() if item.client_id else None
     return {
         "id": item.id,
         "fund_id": item.fund_id,
+        "fund_name": fund.name if fund else None,
         "client_id": item.client_id,
+        "client_name": client.name if client else None,
         "broker": item.broker,
         "account_no": item.account_no,
         "position_count": int(position_count),
         "transaction_count": int(transaction_count),
         "latest_snapshot_date": latest_snapshot_date.isoformat() if latest_snapshot_date else None,
+        "latest_trade_date": latest_trade_date.isoformat() if latest_trade_date else None,
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }
@@ -378,13 +496,21 @@ def _serialize_nav(item) -> dict:
     }
 
 
-def _serialize_rate(item: ExchangeRate) -> dict:
+def _serialize_fee(item: FeeRecord) -> dict:
     return {
         "id": item.id,
-        "base_currency": item.base_currency,
-        "quote_currency": item.quote_currency,
-        "rate": _decimal(item.rate),
-        "snapshot_date": item.snapshot_date.isoformat(),
+        "fund_id": item.fund_id,
+        "fee_date": item.fee_date.isoformat(),
+        "gross_return": _decimal(item.gross_return),
+        "fee_rate": _decimal(item.fee_rate),
+        "fee_amount_usd": _decimal(item.fee_amount_usd),
+        "nav_start": _decimal(item.nav_start),
+        "nav_end_before_fee": _decimal(item.nav_end_before_fee),
+        "annual_return_pct": _decimal(item.annual_return_pct),
+        "excess_return_pct": _decimal(item.excess_return_pct),
+        "fee_base_usd": _decimal(item.fee_base_usd),
+        "nav_after_fee": _decimal(item.nav_after_fee),
+        "applied_date": item.applied_date.isoformat() if item.applied_date else None,
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }
@@ -400,6 +526,45 @@ def _serialize_price(item: AssetPrice) -> dict:
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }
+
+
+def _serialize_rate(item: ExchangeRate) -> dict:
+    return {
+        "id": item.id,
+        "base_currency": item.base_currency,
+        "quote_currency": item.quote_currency,
+        "rate": _decimal(item.rate),
+        "snapshot_date": item.snapshot_date.isoformat(),
+        "created_at": _iso(item.created_at),
+        "updated_at": _iso(item.updated_at),
+    }
+
+
+def _resolve_period(period_type: str, period_value: str) -> tuple[date, date]:
+    period_type = period_type.lower()
+    if period_type == "month":
+        year_text, month_text = period_value.split("-")
+        year = int(year_text)
+        month = int(month_text)
+        end_day = monthrange(year, month)[1]
+        return date(year, month, 1), date(year, month, end_day)
+
+    if period_type == "quarter":
+        year_text, quarter_text = period_value.split("-Q")
+        year = int(year_text)
+        quarter = int(quarter_text)
+        if quarter not in {1, 2, 3, 4}:
+            raise HTTPException(status_code=400, detail="quarter must be between 1 and 4")
+        start_month = (quarter - 1) * 3 + 1
+        end_month = start_month + 2
+        end_day = monthrange(year, end_month)[1]
+        return date(year, start_month, 1), date(year, end_month, end_day)
+
+    if period_type == "year":
+        year = int(period_value)
+        return date(year, 1, 1), date(year, 12, 31)
+
+    raise HTTPException(status_code=400, detail="period_type must be month, quarter, or year")
 
 
 def _decimal(value):

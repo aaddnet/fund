@@ -17,7 +17,9 @@ export default function Home() {
           <li>Review live NAV and share records on the dashboard.</li>
           <li>Create NAV calculations from the NAV page.</li>
           <li>Submit share subscriptions from the Shares page.</li>
-          <li>Manage draft account, client, and import records with create/edit forms.</li>
+          <li>Filter live account and client operational views from real backend data.</li>
+          <li>Open a minimal read-only customer view for balances, share history, and NAV history.</li>
+          <li>Run month / quarter / year operational reports with fund and client filters.</li>
         </ul>
       </div>
     </Layout>

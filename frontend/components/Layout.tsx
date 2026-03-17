@@ -9,6 +9,8 @@ const navItems = [
   { href: '/shares', label: 'Shares' },
   { href: '/accounts', label: 'Accounts' },
   { href: '/clients', label: 'Clients' },
+  { href: '/reports', label: 'Reports' },
+  { href: '/customers/1', label: 'Customer View' },
   { href: '/import', label: 'Import' },
 ];
 

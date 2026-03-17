@@ -16,3 +16,6 @@ Implemented milestones from `implement_v1.md`:
 14. Manual NAV workflow components implemented across import/rate/price/nav services.
 15. Shares page now supports real subscribe/redeem flows and displays current balances.
 16. Basic compile checks + smoke script coverage updated in current environment.
+17. Week 3 read workflow uplift: accounts and clients pages now support backend-driven filters and richer read-only operational details.
+18. Minimal customer read-only view added via `/customer/{client_id}` backend API and `/customers/[clientId]` frontend route.
+19. Basic reporting/query capability added via `/reports/overview` and `/reports` with month/quarter/year plus fund/client filters.

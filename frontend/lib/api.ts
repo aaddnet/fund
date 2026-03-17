@@ -22,17 +22,27 @@ export type Client = {
   id: number;
   name: string;
   email?: string | null;
+  account_count?: number;
+  fund_count?: number;
+  fund_ids?: number[];
+  total_share_balance?: number;
+  share_tx_count?: number;
+  latest_trade_date?: string | null;
+  latest_share_tx_date?: string | null;
 };
 
 export type Account = {
   id: number;
   fund_id: number;
+  fund_name?: string | null;
   client_id?: number | null;
+  client_name?: string | null;
   broker: string;
   account_no: string;
   position_count: number;
   transaction_count: number;
   latest_snapshot_date?: string | null;
+  latest_trade_date?: string | null;
 };
 
 export type Position = {
@@ -127,6 +137,38 @@ export type ImportBatch = {
   preview_rows: ImportPreviewRow[];
 };
 
+export type CustomerView = {
+  client: Client;
+  accounts: Account[];
+  share_balances: ShareBalance[];
+  share_history: ShareTransaction[];
+  nav_history: NavRecord[];
+};
+
+export type ReportOverview = {
+  filters: {
+    period_type: 'month' | 'quarter' | 'year' | string;
+    period_value: string;
+    date_from: string;
+    date_to: string;
+    fund_id?: number | null;
+    client_id?: number | null;
+  };
+  summary: {
+    share_tx_count: number;
+    subscription_amount_usd: number;
+    redemption_amount_usd: number;
+    net_share_flow_usd: number;
+    nav_record_count: number;
+    fee_record_count: number;
+    transaction_count: number;
+  };
+  share_history: ShareTransaction[];
+  nav_records: NavRecord[];
+  fee_records: FeeRecord[];
+  transactions: Transaction[];
+};
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers || {});
   const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
@@ -202,12 +244,20 @@ export async function getFunds(page = 1, size = 50) {
   return fetchJson<ApiListResponse<Fund>>(`/fund${buildQuery({ page, size })}`);
 }
 
-export async function getClients(page = 1, size = 50) {
-  return fetchJson<ApiListResponse<Client>>(`/client${buildQuery({ page, size })}`);
+export async function getClients(params?: { page?: number; size?: number; fundId?: number; q?: string }) {
+  return fetchJson<ApiListResponse<Client>>(`/client${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, q: params?.q })}`);
 }
 
-export async function getAccounts(params?: { page?: number; size?: number; fundId?: number; clientId?: number }) {
-  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, client_id: params?.clientId })}`);
+export async function getClient(clientId: number) {
+  return fetchJson<Client>(`/client/${clientId}`);
+}
+
+export async function getAccounts(params?: { page?: number; size?: number; fundId?: number; clientId?: number; broker?: string; q?: string }) {
+  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, client_id: params?.clientId, broker: params?.broker, q: params?.q })}`);
+}
+
+export async function getAccount(accountId: number) {
+  return fetchJson<Account>(`/account/${accountId}`);
 }
 
 export async function getPositions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; snapshotDate?: string }) {
@@ -216,6 +266,14 @@ export async function getPositions(params?: { page?: number; size?: number; fund
 
 export async function getTransactions(params?: { page?: number; size?: number; fundId?: number; accountId?: number }) {
   return fetchJson<ApiListResponse<Transaction>>(`/transaction${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId })}`);
+}
+
+export async function getCustomerView(clientId: number) {
+  return fetchJson<CustomerView>(`/customer/${clientId}`);
+}
+
+export async function getReportOverview(params: { periodType: string; periodValue: string; fundId?: number; clientId?: number }) {
+  return fetchJson<ReportOverview>(`/reports/overview${buildQuery({ period_type: params.periodType, period_value: params.periodValue, fund_id: params.fundId, client_id: params.clientId })}`);
 }
 
 export async function uploadImportBatch(payload: { source: string; accountId: number; file: File }) {
