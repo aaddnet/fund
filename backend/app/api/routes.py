@@ -606,6 +606,7 @@ def get_reports_overview(
     period_value: str = Query(...),
     fund_id: Optional[int] = None,
     client_id: Optional[int] = None,
+    tx_type: Optional[str] = None,
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
@@ -613,7 +614,7 @@ def get_reports_overview(
     fund_id, client_id = apply_client_scope_filters(actor, fund_id, client_id)
     start_date, end_date = _resolve_period(period_type, period_value)
 
-    share_rows = history(db, fund_id=fund_id, client_id=client_id, date_from=start_date, date_to=end_date)
+    share_rows = history(db, fund_id=fund_id, client_id=client_id, tx_type=tx_type, date_from=start_date, date_to=end_date)
 
     nav_query = db.query(NAVRecord).filter(and_(NAVRecord.nav_date >= start_date, NAVRecord.nav_date <= end_date))
     if fund_id is not None:
@@ -630,18 +631,19 @@ def get_reports_overview(
         fee_rows = [_serialize_fee(item) for item in fee_query.order_by(FeeRecord.fee_date.desc(), FeeRecord.id.desc()).all()]
 
     transaction_query = db.query(Transaction).filter(and_(Transaction.trade_date >= start_date, Transaction.trade_date <= end_date))
-    if fund_id is not None or client_id is not None or actor.role == ROLE_CLIENT_READONLY:
-        transaction_query = transaction_query.join(Account, Account.id == Transaction.account_id)
-        if fund_id is not None:
-            transaction_query = transaction_query.filter(Account.fund_id == fund_id)
-        if client_id is not None:
-            transaction_query = transaction_query.filter(Account.client_id == client_id)
-        elif actor.role == ROLE_CLIENT_READONLY:
-            transaction_query = transaction_query.filter(Account.client_id == actor.client_scope_id)
+    transaction_query = transaction_query.join(Account, Account.id == Transaction.account_id)
+    if fund_id is not None:
+        transaction_query = transaction_query.filter(Account.fund_id == fund_id)
+    if client_id is not None:
+        transaction_query = transaction_query.filter(Account.client_id == client_id)
+    elif actor.role == ROLE_CLIENT_READONLY:
+        transaction_query = transaction_query.filter(Account.client_id == actor.client_scope_id)
     transaction_rows = [_serialize_transaction(item) for item in transaction_query.order_by(Transaction.trade_date.desc(), Transaction.id.desc()).all()]
 
     subscribe_amount = sum(item["amount_usd"] for item in share_rows if item["tx_type"] == "subscribe")
     redeem_amount = sum(item["amount_usd"] for item in share_rows if item["tx_type"] == "redeem")
+    unique_funds = sorted({item["fund_id"] for item in share_rows})
+    unique_clients = sorted({item["client_id"] for item in share_rows})
 
     return {
         "filters": {
@@ -651,6 +653,7 @@ def get_reports_overview(
             "date_to": end_date.isoformat(),
             "fund_id": fund_id,
             "client_id": client_id,
+            "tx_type": tx_type,
             "viewer_role": actor.role,
         },
         "summary": {
@@ -661,11 +664,26 @@ def get_reports_overview(
             "nav_record_count": len(nav_rows),
             "fee_record_count": len(fee_rows),
             "transaction_count": len(transaction_rows),
+            "fund_count": len(unique_funds),
+            "client_count": len(unique_clients),
+            "avg_nav_per_share": round(sum(item["nav_per_share"] for item in nav_rows) / len(nav_rows), 6) if nav_rows else 0,
+            "latest_nav_date": nav_rows[0]["nav_date"] if nav_rows else None,
         },
         "share_history": share_rows,
         "nav_records": nav_rows,
         "fee_records": fee_rows,
         "transactions": transaction_rows,
+        "breakdowns": {
+            "by_fund": _aggregate_report_dimension(share_rows, "fund_id"),
+            "by_client": _aggregate_report_dimension(share_rows, "client_id"),
+            "by_tx_type": _aggregate_report_dimension(share_rows, "tx_type"),
+            "transactions_by_asset": _aggregate_transaction_assets(transaction_rows),
+            "nav_by_fund": _aggregate_nav_by_fund(nav_rows),
+        },
+        "series": {
+            "share_flow_by_date": _aggregate_share_flow_series(share_rows),
+            "nav_trend": _aggregate_nav_series(nav_rows),
+        },
     }
 
 
@@ -974,3 +992,101 @@ def _decimal(value):
 
 def _iso(value):
     return value.isoformat() if value else None
+
+
+def _aggregate_report_dimension(rows: list[dict], key: str) -> list[dict]:
+    buckets: dict[str, dict] = {}
+    for row in rows:
+        bucket_key = str(row.get(key))
+        current = buckets.setdefault(bucket_key, {
+            "key": row.get(key),
+            "share_tx_count": 0,
+            "subscription_amount_usd": 0.0,
+            "redemption_amount_usd": 0.0,
+            "net_share_flow_usd": 0.0,
+            "shares_delta": 0.0,
+            "latest_tx_date": row.get("tx_date"),
+        })
+        current["share_tx_count"] += 1
+        amount = float(row.get("amount_usd") or 0)
+        shares = float(row.get("shares") or 0)
+        if row.get("tx_type") == "subscribe":
+            current["subscription_amount_usd"] += amount
+            current["shares_delta"] += shares
+        elif row.get("tx_type") == "redeem":
+            current["redemption_amount_usd"] += amount
+            current["shares_delta"] -= shares
+        current["net_share_flow_usd"] = current["subscription_amount_usd"] - current["redemption_amount_usd"]
+        if row.get("tx_date") and (current["latest_tx_date"] is None or row["tx_date"] > current["latest_tx_date"]):
+            current["latest_tx_date"] = row["tx_date"]
+    return sorted(buckets.values(), key=lambda item: (-item["net_share_flow_usd"], str(item["key"])))
+
+
+def _aggregate_transaction_assets(rows: list[dict]) -> list[dict]:
+    buckets: dict[str, dict] = {}
+    for row in rows:
+        asset_code = row.get("asset_code")
+        current = buckets.setdefault(asset_code, {
+            "asset_code": asset_code,
+            "transaction_count": 0,
+            "gross_notional_estimate": 0.0,
+            "latest_trade_date": row.get("trade_date"),
+        })
+        current["transaction_count"] += 1
+        current["gross_notional_estimate"] += abs(float(row.get("quantity") or 0) * float(row.get("price") or 0))
+        if row.get("trade_date") and (current["latest_trade_date"] is None or row["trade_date"] > current["latest_trade_date"]):
+            current["latest_trade_date"] = row["trade_date"]
+    return sorted(buckets.values(), key=lambda item: (-item["transaction_count"], item["asset_code"] or ""))
+
+
+def _aggregate_nav_by_fund(rows: list[dict]) -> list[dict]:
+    counts: dict[int, int] = {}
+    latest_rows: dict[int, dict] = {}
+    for row in rows:
+        fund_id = row.get("fund_id")
+        counts[fund_id] = counts.get(fund_id, 0) + 1
+        current = latest_rows.get(fund_id)
+        if current is None or row.get("nav_date", "") > current.get("latest_nav_date", ""):
+            latest_rows[fund_id] = {
+                "fund_id": fund_id,
+                "latest_nav_date": row.get("nav_date"),
+                "latest_nav_per_share": row.get("nav_per_share"),
+                "latest_total_assets_usd": row.get("total_assets_usd"),
+            }
+    return [
+        {**latest_rows[fund_id], "record_count": counts[fund_id]}
+        for fund_id in sorted(latest_rows.keys())
+    ]
+
+
+def _aggregate_share_flow_series(rows: list[dict]) -> list[dict]:
+    buckets: dict[str, dict] = {}
+    for row in rows:
+        tx_date = row.get("tx_date")
+        current = buckets.setdefault(tx_date, {
+            "date": tx_date,
+            "subscription_amount_usd": 0.0,
+            "redemption_amount_usd": 0.0,
+            "net_share_flow_usd": 0.0,
+            "share_tx_count": 0,
+        })
+        current["share_tx_count"] += 1
+        amount = float(row.get("amount_usd") or 0)
+        if row.get("tx_type") == "subscribe":
+            current["subscription_amount_usd"] += amount
+        elif row.get("tx_type") == "redeem":
+            current["redemption_amount_usd"] += amount
+        current["net_share_flow_usd"] = current["subscription_amount_usd"] - current["redemption_amount_usd"]
+    return [buckets[key] for key in sorted(buckets.keys())]
+
+
+def _aggregate_nav_series(rows: list[dict]) -> list[dict]:
+    return [
+        {
+            "date": row.get("nav_date"),
+            "fund_id": row.get("fund_id"),
+            "nav_per_share": row.get("nav_per_share"),
+            "total_assets_usd": row.get("total_assets_usd"),
+        }
+        for row in sorted(rows, key=lambda item: (item.get("nav_date", ""), item.get("fund_id") or 0))
+    ]

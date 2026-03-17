@@ -1,17 +1,19 @@
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import text
 
 from app.api.routes import router
 from app.core.config import settings
 from app.db import SessionLocal, engine
+from app.monitoring import metrics
 from app.services.auth import bootstrap_auth_users
 from app.services.scheduler import start_scheduler, stop_scheduler
 
@@ -31,6 +33,16 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Fund Management System V1", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def capture_request_metrics(request: Request, call_next):
+    started = perf_counter()
+    response = await call_next(request)
+    duration_ms = (perf_counter() - started) * 1000
+    metrics.record(request.method, request.url.path, response.status_code, duration_ms)
+    response.headers["X-Response-Time-Ms"] = f"{duration_ms:.2f}"
+    return response
 
 
 @app.middleware("http")
@@ -82,7 +94,19 @@ def root():
 
 @app.get("/health")
 def health():
+    return {"status": "ok", "uptime_seconds": metrics.snapshot()["uptime_seconds"]}
+
+
+@app.get("/health/live")
+def health_live():
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def health_ready():
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    return {"status": "ready", "database": "ok"}
 
 
 @app.get("/health/db")
@@ -90,3 +114,13 @@ def health_db():
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return {"db": "ok"}
+
+
+@app.get("/metrics")
+def get_metrics():
+    return PlainTextResponse(metrics.render_prometheus(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@app.get("/metrics/json")
+def get_metrics_json():
+    return metrics.snapshot()
