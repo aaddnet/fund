@@ -5,10 +5,11 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db import get_db
 from app.models import Account, AssetPrice, AuthUser, Client, ExchangeRate, FeeRecord, Fund, NAVRecord, Position, Transaction
 from app.schemas.common import FeeCalcRequest, NavCalcRequest, PriceFetchRequest, RateFetchRequest, ShareRequest
@@ -41,15 +42,22 @@ MAX_SIZE = 200
 
 
 @router.post("/auth/login")
-def auth_login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+def auth_login(response: Response, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     session = login_with_password(db, username=username, password=password)
-    return _serialize_auth_session(session)
+    payload = _serialize_auth_session(session)
+    _set_auth_cookies(response, session)
+    return payload
 
 
 @router.post("/auth/refresh")
-def auth_refresh(refresh_token: str = Form(...), db: Session = Depends(get_db)):
-    session = refresh_access_token(db, refresh_token=refresh_token)
-    return _serialize_auth_session(session)
+def auth_refresh(request: Request, response: Response, refresh_token: Optional[str] = Form(default=None), db: Session = Depends(get_db)):
+    effective_refresh_token = refresh_token or request.cookies.get(settings.auth_refresh_cookie_name)
+    if not effective_refresh_token:
+        raise HTTPException(status_code=401, detail="refresh token required")
+    session = refresh_access_token(db, refresh_token=effective_refresh_token)
+    payload = _serialize_auth_session(session)
+    _set_auth_cookies(response, session)
+    return payload
 
 
 @router.get("/auth/me")
@@ -73,6 +81,7 @@ def auth_me(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
 def auth_logout(response: Response, actor: Actor = Depends(get_actor), db: Session = Depends(get_db)):
     if actor.session_id:
         revoke_session(db, actor.session_id)
+    _clear_auth_cookies(response)
     response.status_code = 204
     return response
 
@@ -818,6 +827,34 @@ def _serialize_auth_session(session) -> dict:
         "refresh_expires_at": session.refresh_expires_at.isoformat(),
         "user": _serialize_auth_user(session.user),
     }
+
+
+def _set_auth_cookies(response: Response, session) -> None:
+    if not settings.auth_cookie_enabled:
+        return
+    common = {
+        "httponly": True,
+        "secure": settings.auth_cookie_secure,
+        "samesite": settings.auth_cookie_samesite,
+        "path": "/",
+    }
+    response.set_cookie(
+        key=settings.auth_access_cookie_name,
+        value=session.access_token,
+        max_age=max(settings.auth_access_token_ttl_minutes * 60, 0),
+        **common,
+    )
+    response.set_cookie(
+        key=settings.auth_refresh_cookie_name,
+        value=session.refresh_token,
+        max_age=max(settings.auth_refresh_token_ttl_days * 24 * 60 * 60, 0),
+        **common,
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    for cookie_name in (settings.auth_access_cookie_name, settings.auth_refresh_cookie_name):
+        response.delete_cookie(cookie_name, path="/")
 
 
 def _resolve_period(period_type: str, period_value: str) -> tuple[date, date]:

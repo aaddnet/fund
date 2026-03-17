@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException, Query
+from fastapi import Cookie, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -217,6 +217,34 @@ def _mint_session_tokens() -> tuple[str, str]:
     return os.urandom(32).hex(), os.urandom(32).hex()
 
 
+def _session_reference_time(session: AuthSession) -> datetime:
+    return _coerce_utc(session.last_seen_at) or _coerce_utc(session.refreshed_at) or _coerce_utc(session.created_at) or _utcnow()
+
+
+def _session_expired_by_idle_timeout(session: AuthSession, now: datetime) -> bool:
+    idle_minutes = max(int(settings.auth_session_idle_minutes or 0), 0)
+    if idle_minutes <= 0:
+        return False
+    return _session_reference_time(session) + timedelta(minutes=idle_minutes) <= now
+
+
+def _session_invalid_for_user(session: AuthSession, user: AuthUser, now: datetime) -> bool:
+    password_changed_at = _coerce_utc(user.password_changed_at)
+    session_anchor = _coerce_utc(session.refreshed_at) or _coerce_utc(session.created_at)
+    if password_changed_at and session_anchor and password_changed_at > session_anchor:
+        return True
+    return _session_expired_by_idle_timeout(session, now)
+
+
+def _revoke_user_sessions(db: Session, user_id: int, *, except_session_id: Optional[int] = None) -> None:
+    query = db.query(AuthSession).filter(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+    if except_session_id is not None:
+        query = query.filter(AuthSession.id != except_session_id)
+    now = _utcnow()
+    for session in query.all():
+        session.revoked_at = now
+
+
 def bootstrap_auth_users(db: Session) -> None:
     configured_users = settings.auth_bootstrap_users or []
     for item in configured_users:
@@ -305,6 +333,8 @@ def login_with_password(db: Session, username: str, password: str) -> Authentica
                     user.client_scope_id = item["client_scope_id"]
                     break
 
+    # 密码登录后主动回收历史 session，减少 refresh token 长驻窗口。
+    _revoke_user_sessions(db, user.id)
     db.commit()
     db.refresh(user)
     return _issue_session(db, user)
@@ -351,7 +381,9 @@ def authenticate_bearer_token(db: Session, authorization: Optional[str]) -> Opti
     session, user = row
     now = _utcnow()
     expires_at = _coerce_utc(session.expires_at)
-    if session.revoked_at is not None or (expires_at and expires_at <= now) or not user.is_active:
+    if session.revoked_at is not None or (expires_at and expires_at <= now) or not user.is_active or _session_invalid_for_user(session, user, now):
+        session.revoked_at = session.revoked_at or now
+        db.commit()
         raise HTTPException(status_code=401, detail="session expired or revoked")
 
     session.last_seen_at = now
@@ -373,7 +405,14 @@ def refresh_access_token(db: Session, refresh_token: str) -> AuthenticatedSessio
     session, user = row
     now = _utcnow()
     refresh_expires_at = _coerce_utc(session.refresh_expires_at)
-    if session.revoked_at is not None or (refresh_expires_at and refresh_expires_at <= now) or not user.is_active:
+    if (
+        session.revoked_at is not None
+        or (refresh_expires_at and refresh_expires_at <= now)
+        or not user.is_active
+        or _session_invalid_for_user(session, user, now)
+    ):
+        session.revoked_at = session.revoked_at or now
+        db.commit()
         raise HTTPException(status_code=401, detail="refresh token expired or revoked")
     _ensure_not_locked(user)
 
@@ -400,6 +439,7 @@ def refresh_access_token(db: Session, refresh_token: str) -> AuthenticatedSessio
 async def get_actor(
     db: Session = Depends(get_db),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    access_cookie: Optional[str] = Cookie(default=None, alias=settings.auth_access_cookie_name),
     role_header: Optional[str] = Header(default=None, alias=settings.auth_role_header),
     client_id_header: Optional[str] = Header(default=None, alias=settings.auth_client_id_header),
     operator_header: Optional[str] = Header(default=None, alias=settings.auth_operator_header),
@@ -411,7 +451,8 @@ async def get_actor(
         return Actor(role=ROLE_ADMIN, operator_id="auth-disabled", auth_mode="disabled", permissions=permissions_for_role(ROLE_ADMIN))
 
     if settings.auth_mode in {"token", "session", "hybrid"}:
-        actor = authenticate_bearer_token(db, authorization)
+        auth_value = authorization or (f"Bearer {access_cookie}" if settings.auth_cookie_enabled and access_cookie else None)
+        actor = authenticate_bearer_token(db, auth_value)
         if actor is not None:
             return actor
         if settings.auth_mode in {"token", "session"} and not settings.auth_allow_dev_fallback:

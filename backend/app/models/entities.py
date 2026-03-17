@@ -1,6 +1,20 @@
 import json
 
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from app.db import Base
 
 
@@ -26,6 +40,10 @@ class Client(Base, TimestampMixin):
 
 class Account(Base, TimestampMixin):
     __tablename__ = "account"
+    __table_args__ = (
+        UniqueConstraint("fund_id", "account_no", name="uq_account_fund_account_no"),
+        Index("idx_account_client_id", "client_id"),
+    )
     id = Column(Integer, primary_key=True)
     fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
     client_id = Column(Integer, ForeignKey("client.id"))
@@ -35,6 +53,7 @@ class Account(Base, TimestampMixin):
 
 class Holding(Base, TimestampMixin):
     __tablename__ = "holding"
+    __table_args__ = (UniqueConstraint("account_id", "asset_code", "as_of_date", name="uq_holding_account_asset_date"),)
     id = Column(Integer, primary_key=True)
     account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
     asset_code = Column(String(50), nullable=False)
@@ -44,6 +63,10 @@ class Holding(Base, TimestampMixin):
 
 class Position(Base, TimestampMixin):
     __tablename__ = "position"
+    __table_args__ = (
+        UniqueConstraint("account_id", "asset_code", "snapshot_date", name="uq_position_account_asset_snapshot"),
+        Index("idx_position_account_snapshot_date", "account_id", "snapshot_date"),
+    )
     id = Column(Integer, primary_key=True)
     account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
     asset_code = Column(String(50), nullable=False)
@@ -55,6 +78,13 @@ class Position(Base, TimestampMixin):
 
 class ImportBatch(Base, TimestampMixin):
     __tablename__ = "import_batch"
+    __table_args__ = (
+        CheckConstraint("row_count >= 0", name="ck_import_batch_row_count_non_negative"),
+        CheckConstraint("parsed_count >= 0", name="ck_import_batch_parsed_count_non_negative"),
+        CheckConstraint("confirmed_count >= 0", name="ck_import_batch_confirmed_count_non_negative"),
+        Index("idx_import_batch_account_id", "account_id"),
+        Index("idx_import_batch_status", "status"),
+    )
     id = Column(Integer, primary_key=True)
     source = Column(String(50), nullable=False)
     filename = Column(String(255))
@@ -77,6 +107,10 @@ class ImportBatch(Base, TimestampMixin):
 
 class Transaction(Base, TimestampMixin):
     __tablename__ = "transaction"
+    __table_args__ = (
+        Index("idx_transaction_account_trade_date", "account_id", "trade_date"),
+        Index("idx_transaction_import_batch_id", "import_batch_id"),
+    )
     id = Column(Integer, primary_key=True)
     account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
     trade_date = Column(Date, nullable=False)
@@ -123,6 +157,7 @@ class NAVRecord(Base, TimestampMixin):
 
 class AssetSnapshot(Base, TimestampMixin):
     __tablename__ = "asset_snapshot"
+    __table_args__ = (Index("idx_asset_snapshot_nav_record_id", "nav_record_id"),)
     id = Column(Integer, primary_key=True)
     nav_record_id = Column(Integer, ForeignKey("nav_record.id"), nullable=False)
     asset_code = Column(String(50), nullable=False)
@@ -138,6 +173,7 @@ class AssetSnapshot(Base, TimestampMixin):
 
 class ShareTransaction(Base, TimestampMixin):
     __tablename__ = "share_transaction"
+    __table_args__ = (Index("idx_share_transaction_client_date", "client_id", "tx_date"),)
     id = Column(Integer, primary_key=True)
     fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
     client_id = Column(Integer, ForeignKey("client.id"), nullable=False)
@@ -150,6 +186,10 @@ class ShareTransaction(Base, TimestampMixin):
 
 class FeeRecord(Base, TimestampMixin):
     __tablename__ = "fee_record"
+    __table_args__ = (
+        UniqueConstraint("fund_id", "fee_date", name="uq_fee_record_fund_fee_date"),
+        Index("idx_fee_record_fund_date", "fund_id", "fee_date"),
+    )
     id = Column(Integer, primary_key=True)
     fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
     fee_date = Column(Date, nullable=False)
@@ -167,6 +207,10 @@ class FeeRecord(Base, TimestampMixin):
 
 class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("idx_audit_log_action_created_at", "action", "created_at"),
+        Index("idx_audit_log_client_scope_id", "client_scope_id"),
+    )
     id = Column(Integer, primary_key=True)
     actor_role = Column(String(50), nullable=False)
     actor_id = Column(String(100), nullable=False)
@@ -187,6 +231,7 @@ class AuditLog(Base, TimestampMixin):
 
 class SchedulerJobRun(Base, TimestampMixin):
     __tablename__ = "scheduler_job_run"
+    __table_args__ = (Index("idx_scheduler_job_run_name_started_at", "job_name", "started_at"),)
     id = Column(Integer, primary_key=True)
     job_name = Column(String(100), nullable=False)
     trigger_source = Column(String(30), nullable=False)
@@ -206,7 +251,7 @@ class SchedulerJobRun(Base, TimestampMixin):
 
 class AuthUser(Base, TimestampMixin):
     __tablename__ = "auth_user"
-    __table_args__ = (UniqueConstraint("username"),)
+    __table_args__ = (UniqueConstraint("username"), Index("idx_auth_user_role", "role"),)
     id = Column(Integer, primary_key=True)
     username = Column(String(100), nullable=False)
     password_hash = Column(String(255), nullable=False)
@@ -223,7 +268,13 @@ class AuthUser(Base, TimestampMixin):
 
 class AuthSession(Base, TimestampMixin):
     __tablename__ = "auth_session"
-    __table_args__ = (UniqueConstraint("session_token_hash"), UniqueConstraint("refresh_token_hash"),)
+    __table_args__ = (
+        UniqueConstraint("session_token_hash"),
+        UniqueConstraint("refresh_token_hash"),
+        Index("idx_auth_session_user_id", "user_id"),
+        Index("idx_auth_session_active_expires_at", "revoked_at", "expires_at"),
+        Index("idx_auth_session_refresh_expires_at", "refresh_expires_at"),
+    )
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("auth_user.id"), nullable=False)
     session_token_hash = Column(String(255), nullable=False)
