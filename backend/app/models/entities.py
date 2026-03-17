@@ -163,3 +163,42 @@ class FeeRecord(Base, TimestampMixin):
     fee_base_usd = Column(Numeric(24, 8))
     nav_after_fee = Column(Numeric(24, 8))
     applied_date = Column(Date)
+
+
+class AuditLog(Base, TimestampMixin):
+    __tablename__ = "audit_log"
+    id = Column(Integer, primary_key=True)
+    actor_role = Column(String(50), nullable=False)
+    actor_id = Column(String(100), nullable=False)
+    client_scope_id = Column(Integer)
+    action = Column(String(100), nullable=False)
+    entity_type = Column(String(100), nullable=False)
+    entity_id = Column(String(100))
+    status = Column(String(30), nullable=False, default="success")
+    detail_json = Column(Text, nullable=False, default="{}")
+
+    @property
+    def detail(self):
+        try:
+            return json.loads(self.detail_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+
+class SchedulerJobRun(Base, TimestampMixin):
+    __tablename__ = "scheduler_job_run"
+    id = Column(Integer, primary_key=True)
+    job_name = Column(String(100), nullable=False)
+    trigger_source = Column(String(30), nullable=False)
+    status = Column(String(30), nullable=False)
+    message = Column(Text)
+    detail_json = Column(Text, nullable=False, default="{}")
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at = Column(DateTime(timezone=True))
+
+    @property
+    def detail(self):
+        try:
+            return json.loads(self.detail_json or "{}")
+        except json.JSONDecodeError:
+            return {}

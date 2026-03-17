@@ -64,8 +64,8 @@ with open('/tmp/invest-import-upload.json') as fh:
 print(data['id'])
 PY
 )"
-curl -fsS "$BASE_URL/import/$IMPORT_BATCH_ID" | tee /tmp/invest-import-detail.json && echo
-curl -fsS -X POST "$BASE_URL/import/$IMPORT_BATCH_ID/confirm" | tee /tmp/invest-import-confirm.json && echo
+curl -fsS -H 'x-dev-role: ops' "$BASE_URL/import/$IMPORT_BATCH_ID" | tee /tmp/invest-import-detail.json && echo
+curl -fsS -X POST -H 'x-dev-role: ops' -H 'x-operator-id: smoke' "$BASE_URL/import/$IMPORT_BATCH_ID/confirm" | tee /tmp/invest-import-confirm.json && echo
 
 echo "== Read APIs =="
 curl -fsS "$BASE_URL/fund?page=1&size=10" | tee /tmp/invest-funds.json && echo
@@ -83,6 +83,28 @@ curl -fsS "$BASE_URL/share/history?fund_id=1&client_id=1" | tee /tmp/invest-shar
 curl -fsS "$BASE_URL/share/balances?fund_id=1" | tee /tmp/invest-share-balances.json && echo
 curl -fsS -X POST "$BASE_URL/fee/calc" -H 'Content-Type: application/json' -d '{"fund_id":1,"fee_date":"2026-09-30"}' | tee /tmp/invest-fee.json && echo
 curl -fsS "$BASE_URL/fee" | tee /tmp/invest-fee-list.json && echo
+
+echo "== Frontend =="
+curl -fsSI "$WEB_URL" | sed -n '1,8p'
+
+echo "Smoke test completed successfully."
+ successfully."
+09-30"}' | tee /tmp/invest-fee.json && echo
+curl -fsS -H 'x-dev-role: ops' "$BASE_URL/fee" | tee /tmp/invest-fee-list.json && echo
+
+echo "== Scheduler and audit =="
+curl -fsS -X POST "$BASE_URL/scheduler/jobs/fx-weekly/run" -H 'x-dev-role: ops' -H 'x-operator-id: smoke' | tee /tmp/invest-scheduler-run.json && echo
+curl -fsS -H 'x-dev-role: ops' "$BASE_URL/scheduler/jobs?limit=10" | tee /tmp/invest-scheduler-jobs.json && echo
+curl -fsS -H 'x-dev-role: ops' "$BASE_URL/audit?limit=20" | tee /tmp/invest-audit.json && echo
+
+
+echo "== Client readonly boundary =="
+curl -fsS -H 'x-dev-role: client-readonly' -H 'x-client-id: 1' "$BASE_URL/customer/1" | tee /tmp/invest-customer-1.json && echo
+curl -sS -o /tmp/invest-customer-2-denied.txt -w '%{http_code}' -H 'x-dev-role: client-readonly' -H 'x-client-id: 1' "$BASE_URL/customer/2" | tee /tmp/invest-customer-2-code.txt && echo
+if [[ "$(cat /tmp/invest-customer-2-code.txt)" != "403" ]]; then
+  echo "Expected client-readonly access to other customer to be forbidden" >&2
+  exit 1
+fi
 
 echo "== Frontend =="
 curl -fsSI "$WEB_URL" | sed -n '1,8p'

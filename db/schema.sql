@@ -160,6 +160,33 @@ CREATE TABLE IF NOT EXISTS fee_record (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS audit_log (
+    id SERIAL PRIMARY KEY,
+    actor_role VARCHAR(50) NOT NULL,
+    actor_id VARCHAR(100) NOT NULL,
+    client_scope_id INT,
+    action VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(100) NOT NULL,
+    entity_id VARCHAR(100),
+    status VARCHAR(30) NOT NULL DEFAULT 'success',
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS scheduler_job_run (
+    id SERIAL PRIMARY KEY,
+    job_name VARCHAR(100) NOT NULL,
+    trigger_source VARCHAR(30) NOT NULL,
+    status VARCHAR(30) NOT NULL,
+    message TEXT,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 ALTER TABLE transaction
     ADD CONSTRAINT fk_transaction_import_batch
     FOREIGN KEY (import_batch_id) REFERENCES import_batch(id);

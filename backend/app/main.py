@@ -1,11 +1,38 @@
-from sqlalchemy import inspect, text
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from sqlalchemy import inspect, text
 
 from app.api.routes import router
 from app.db import Base, engine
+from app.services.scheduler import start_scheduler, stop_scheduler
 
-app = FastAPI(title="Fund Management System V1")
-Base.metadata.create_all(bind=engine)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    ensure_runtime_columns()
+    start_scheduler()
+    try:
+        yield
+    finally:
+        stop_scheduler()
+
+
+app = FastAPI(title="Fund Management System V1", lifespan=lifespan)
+app.include_router(router)
+
+
+def ensure_runtime_columns() -> None:
+    ensure_import_batch_columns()
+    ensure_asset_snapshot_columns()
+    ensure_fee_record_columns()
+    ensure_audit_log_table()
+    ensure_scheduler_job_run_table()
 
 
 def ensure_import_batch_columns() -> None:
@@ -102,10 +129,55 @@ def ensure_fee_record_columns() -> None:
             conn.execute(text(statement))
 
 
-ensure_import_batch_columns()
-ensure_asset_snapshot_columns()
-ensure_fee_record_columns()
-app.include_router(router)
+def ensure_audit_log_table() -> None:
+    inspector = inspect(engine)
+    if "audit_log" in inspector.get_table_names():
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE audit_log (
+                    id INTEGER PRIMARY KEY,
+                    actor_role VARCHAR(50) NOT NULL,
+                    actor_id VARCHAR(100) NOT NULL,
+                    client_scope_id INTEGER,
+                    action VARCHAR(100) NOT NULL,
+                    entity_type VARCHAR(100) NOT NULL,
+                    entity_id VARCHAR(100),
+                    status VARCHAR(30) NOT NULL DEFAULT 'success',
+                    detail_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
+
+def ensure_scheduler_job_run_table() -> None:
+    inspector = inspect(engine)
+    if "scheduler_job_run" in inspector.get_table_names():
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE scheduler_job_run (
+                    id INTEGER PRIMARY KEY,
+                    job_name VARCHAR(100) NOT NULL,
+                    trigger_source VARCHAR(30) NOT NULL,
+                    status VARCHAR(30) NOT NULL,
+                    message TEXT,
+                    detail_json TEXT NOT NULL DEFAULT '{}',
+                    started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
 
 
 @app.get("/")
