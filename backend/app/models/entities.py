@@ -274,11 +274,15 @@ class AuthSession(Base, TimestampMixin):
         Index("idx_auth_session_user_id", "user_id"),
         Index("idx_auth_session_active_expires_at", "revoked_at", "expires_at"),
         Index("idx_auth_session_refresh_expires_at", "refresh_expires_at"),
+        Index("idx_auth_session_refresh_family", "refresh_family_id"),
     )
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("auth_user.id"), nullable=False)
     session_token_hash = Column(String(255), nullable=False)
     refresh_token_hash = Column(String(255), nullable=False)
+    refresh_parent_hash = Column(String(255))
+    refresh_family_id = Column(String(64))
+    refresh_reused_at = Column(DateTime(timezone=True))
     expires_at = Column(DateTime(timezone=True), nullable=False)
     refresh_expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked_at = Column(DateTime(timezone=True))

@@ -27,7 +27,7 @@ def test_login_sets_http_only_auth_cookies(client):
     assert response.json()["csrf_token"]
 
 
-def test_refresh_rotates_access_token(client):
+def test_refresh_rotates_access_token(client, seeded_db):
     login_response = client.post("/auth/login", data={"username": "ops", "password": "Ops1234567"})
     payload = login_response.json()
     refresh_response = client.post(
@@ -39,6 +39,11 @@ def test_refresh_rotates_access_token(client):
     refreshed = refresh_response.json()
     assert refreshed["access_token"] != payload["access_token"]
     assert refreshed["refresh_token"] != payload["refresh_token"]
+
+    db = seeded_db
+    session = db.query(AuthSession).order_by(AuthSession.id.desc()).first()
+    assert session.refresh_parent_hash is not None
+    assert session.refresh_family_id is not None
 
 
 def test_refresh_accepts_cookie_when_form_token_missing(client):
@@ -199,6 +204,39 @@ def test_idle_session_is_rejected_for_refresh(client, seeded_db):
         headers={"x-csrf-token": client.cookies.get("invest_csrf_token")},
     )
     assert refresh_response.status_code == 401
+
+
+def test_refresh_token_reuse_revokes_refresh_family(client, seeded_db):
+    login_response = client.post("/auth/login", data={"username": "ops", "password": "Ops1234567"})
+    first_refresh_token = login_response.json()["refresh_token"]
+
+    refresh_response = client.post(
+        "/auth/refresh",
+        data={"refresh_token": first_refresh_token},
+        headers={"x-csrf-token": client.cookies.get("invest_csrf_token")},
+    )
+    assert refresh_response.status_code == 200
+    second_refresh_token = refresh_response.json()["refresh_token"]
+
+    reuse_response = client.post(
+        "/auth/refresh",
+        data={"refresh_token": first_refresh_token},
+        headers={"x-csrf-token": client.cookies.get("invest_csrf_token")},
+    )
+    assert reuse_response.status_code == 401
+    assert "reuse" in reuse_response.json()["detail"]
+
+    family_refresh_response = client.post(
+        "/auth/refresh",
+        data={"refresh_token": second_refresh_token},
+        headers={"x-csrf-token": client.cookies.get("invest_csrf_token")},
+    )
+    assert family_refresh_response.status_code == 401
+
+    db = seeded_db
+    sessions = db.query(AuthSession).all()
+    assert sessions
+    assert all(session.revoked_at is not None for session in sessions)
 
 
 def test_admin_can_create_and_list_auth_users(client, seeded_db):

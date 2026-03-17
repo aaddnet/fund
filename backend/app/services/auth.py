@@ -219,6 +219,10 @@ def _mint_session_tokens() -> tuple[str, str, str]:
     return os.urandom(32).hex(), os.urandom(32).hex(), os.urandom(24).hex()
 
 
+def _mint_refresh_family_id() -> str:
+    return os.urandom(16).hex()
+
+
 def _session_reference_time(session: AuthSession) -> datetime:
     return _coerce_utc(session.last_seen_at) or _coerce_utc(session.refreshed_at) or _coerce_utc(session.created_at) or _utcnow()
 
@@ -245,6 +249,16 @@ def _revoke_user_sessions(db: Session, user_id: int, *, except_session_id: Optio
     now = _utcnow()
     for session in query.all():
         session.revoked_at = now
+
+
+def _revoke_refresh_family(db: Session, refresh_family_id: Optional[str], *, reason: str = "refresh_reuse_detected") -> None:
+    if not refresh_family_id:
+        return
+    now = _utcnow()
+    rows = db.query(AuthSession).filter(AuthSession.refresh_family_id == refresh_family_id).all()
+    for session in rows:
+        session.revoked_at = session.revoked_at or now
+        session.refresh_reused_at = session.refresh_reused_at or now
 
 
 def _validate_client_scope(db: Session, role: str, client_scope_id: Optional[int]) -> Optional[int]:
@@ -407,6 +421,7 @@ def _issue_session(db: Session, user: AuthUser) -> AuthenticatedSession:
         user_id=user.id,
         session_token_hash=_hash_session_token(raw_access_token),
         refresh_token_hash=_hash_refresh_token(raw_refresh_token),
+        refresh_family_id=_mint_refresh_family_id(),
         expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         last_seen_at=now,
@@ -515,11 +530,16 @@ def refresh_access_token(db: Session, refresh_token: str) -> AuthenticatedSessio
         .filter(AuthSession.refresh_token_hash == hashed)
         .first()
     )
+    now = _utcnow()
     if not row:
+        reused_session = db.query(AuthSession).filter(AuthSession.refresh_parent_hash == hashed).first()
+        if reused_session:
+            _revoke_refresh_family(db, reused_session.refresh_family_id)
+            db.commit()
+            raise HTTPException(status_code=401, detail="refresh token reuse detected")
         raise HTTPException(status_code=401, detail="invalid refresh token")
 
     session, user = row
-    now = _utcnow()
     refresh_expires_at = _coerce_utc(session.refresh_expires_at)
     if (
         session.revoked_at is not None
@@ -532,9 +552,13 @@ def refresh_access_token(db: Session, refresh_token: str) -> AuthenticatedSessio
         raise HTTPException(status_code=401, detail="refresh token expired or revoked")
     _ensure_not_locked(user)
 
+    old_refresh_token_hash = session.refresh_token_hash
     raw_access_token, raw_refresh_token, csrf_token = _mint_session_tokens()
     session.session_token_hash = _hash_session_token(raw_access_token)
     session.refresh_token_hash = _hash_refresh_token(raw_refresh_token)
+    session.refresh_parent_hash = old_refresh_token_hash
+    session.refresh_family_id = session.refresh_family_id or _mint_refresh_family_id()
+    session.refresh_reused_at = None
     session.expires_at = now + timedelta(minutes=settings.auth_access_token_ttl_minutes)
     session.refresh_expires_at = now + timedelta(days=settings.auth_refresh_token_ttl_days)
     session.last_seen_at = now
