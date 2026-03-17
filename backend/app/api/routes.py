@@ -16,7 +16,7 @@ from app.services.fee_service import calc_fee, list_fees
 from app.services.import_service import confirm_batch, get_batch, list_batches, serialize_batch, upload_csv
 from app.services.nav_engine import calc_nav, list_nav
 from app.services.price_service import fetch_and_save_prices
-from app.services.share_service import history, redeem, subscribe
+from app.services.share_service import balances, history, redeem, subscribe
 
 router = APIRouter()
 DEFAULT_PAGE = 1
@@ -99,8 +99,20 @@ def red(req: ShareRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/share/history")
-def share_history(db: Session = Depends(get_db)):
-    return history(db)
+def share_history(
+    fund_id: Optional[int] = None,
+    client_id: Optional[int] = None,
+    tx_type: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    db: Session = Depends(get_db),
+):
+    return history(db, fund_id=fund_id, client_id=client_id, tx_type=tx_type, date_from=date_from, date_to=date_to)
+
+
+@router.get("/share/balances")
+def share_balances(fund_id: Optional[int] = None, client_id: Optional[int] = None, db: Session = Depends(get_db)):
+    return balances(db, fund_id=fund_id, client_id=client_id)
 
 
 @router.post("/fee/calc")

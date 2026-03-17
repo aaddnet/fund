@@ -149,6 +149,13 @@ CREATE TABLE IF NOT EXISTS fee_record (
     gross_return NUMERIC(12,6) NOT NULL,
     fee_rate NUMERIC(12,6) NOT NULL,
     fee_amount_usd NUMERIC(24,8) NOT NULL,
+    nav_start NUMERIC(24,8),
+    nav_end_before_fee NUMERIC(24,8),
+    annual_return_pct NUMERIC(12,6),
+    excess_return_pct NUMERIC(12,6),
+    fee_base_usd NUMERIC(24,8),
+    nav_after_fee NUMERIC(24,8),
+    applied_date DATE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -164,3 +171,4 @@ CREATE INDEX IF NOT EXISTS idx_exchange_rate_snapshot_date ON exchange_rate(snap
 CREATE INDEX IF NOT EXISTS idx_asset_price_snapshot_date ON asset_price(snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_nav_record_date ON nav_record(nav_date);
 CREATE INDEX IF NOT EXISTS idx_share_transaction_date ON share_transaction(tx_date);
+CREATE INDEX IF NOT EXISTS idx_share_transaction_fund_client ON share_transaction(fund_id, client_id);

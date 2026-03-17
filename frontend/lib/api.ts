@@ -79,6 +79,12 @@ export type ShareTransaction = {
   nav_at_date: number;
 };
 
+export type ShareBalance = {
+  fund_id: number;
+  client_id: number;
+  share_balance: number;
+};
+
 export type FeeRecord = {
   id: number;
   fund_id: number;
@@ -86,6 +92,13 @@ export type FeeRecord = {
   gross_return: number;
   fee_rate: number;
   fee_amount_usd: number;
+  nav_start?: number | null;
+  nav_end_before_fee?: number | null;
+  annual_return_pct?: number | null;
+  excess_return_pct?: number | null;
+  fee_base_usd?: number | null;
+  nav_after_fee?: number | null;
+  applied_date?: string | null;
 };
 
 export type ImportPreviewRow = {
@@ -127,8 +140,17 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `API ${path} failed with ${response.status}`);
+    let message = `API ${path} failed with ${response.status}`;
+    try {
+      const body = await response.json();
+      message = body.detail || JSON.stringify(body);
+    } catch {
+      const text = await response.text();
+      if (text) {
+        message = text;
+      }
+    }
+    throw new Error(message);
   }
   return response.json();
 }
@@ -156,8 +178,12 @@ export async function getNav(fundId?: number) {
   return fetchJson<NavRecord[]>(`/nav${buildQuery({ fund_id: fundId })}`);
 }
 
-export async function getShareHistory() {
-  return fetchJson<ShareTransaction[]>('/share/history');
+export async function getShareHistory(params?: { fundId?: number; clientId?: number; txType?: string; dateFrom?: string; dateTo?: string }) {
+  return fetchJson<ShareTransaction[]>(`/share/history${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId, tx_type: params?.txType, date_from: params?.dateFrom, date_to: params?.dateTo })}`);
+}
+
+export async function getShareBalances(params?: { fundId?: number; clientId?: number }) {
+  return fetchJson<ShareBalance[]>(`/share/balances${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId })}`);
 }
 
 export async function getFees() {
@@ -218,6 +244,13 @@ export async function createNav(payload: { fund_id: number; nav_date: string }) 
 
 export async function createShareSubscription(payload: { fund_id: number; client_id: number; tx_date: string; amount_usd: number }) {
   return fetchJson<ShareTransaction>('/share/subscribe', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createShareRedemption(payload: { fund_id: number; client_id: number; tx_date: string; amount_usd: number }) {
+  return fetchJson<ShareTransaction>('/share/redeem', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

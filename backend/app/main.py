@@ -72,8 +72,39 @@ def ensure_asset_snapshot_columns() -> None:
             conn.execute(text(statement))
 
 
+def ensure_fee_record_columns() -> None:
+    inspector = inspect(engine)
+    if "fee_record" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("fee_record")}
+    statements: list[str] = []
+    if "nav_start" not in columns:
+        statements.append("ALTER TABLE fee_record ADD COLUMN nav_start NUMERIC(24,8)")
+    if "nav_end_before_fee" not in columns:
+        statements.append("ALTER TABLE fee_record ADD COLUMN nav_end_before_fee NUMERIC(24,8)")
+    if "annual_return_pct" not in columns:
+        statements.append("ALTER TABLE fee_record ADD COLUMN annual_return_pct NUMERIC(12,6)")
+    if "excess_return_pct" not in columns:
+        statements.append("ALTER TABLE fee_record ADD COLUMN excess_return_pct NUMERIC(12,6)")
+    if "fee_base_usd" not in columns:
+        statements.append("ALTER TABLE fee_record ADD COLUMN fee_base_usd NUMERIC(24,8)")
+    if "nav_after_fee" not in columns:
+        statements.append("ALTER TABLE fee_record ADD COLUMN nav_after_fee NUMERIC(24,8)")
+    if "applied_date" not in columns:
+        statements.append("ALTER TABLE fee_record ADD COLUMN applied_date DATE")
+
+    if not statements:
+        return
+
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
+
 ensure_import_batch_columns()
 ensure_asset_snapshot_columns()
+ensure_fee_record_columns()
 app.include_router(router)
 
 

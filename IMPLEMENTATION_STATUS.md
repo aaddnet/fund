@@ -9,9 +9,10 @@ Implemented milestones from `implement_v1.md`:
 5. Exchange rate snapshot service (Frankfurter) and `/rates` APIs.
 6. Asset price snapshot service (yfinance/CoinGecko) and `/price/fetch` API.
 7. NAV engine (`/nav/calc`, `/nav`) with locked NAV + asset snapshots.
-8. Share transaction service (`/share/subscribe`, `/share/redeem`, `/share/history`) with quarter-month guard.
-9. Performance fee service (`/fee/calc`, `/fee`).
+8. Share transaction service (`/share/subscribe`, `/share/redeem`, `/share/history`, `/share/balances`) with quarter-month guard, balance derivation, and over-redemption validation.
+9. Performance fee service (`/fee/calc`, `/fee`) with richer fee record fields aligned to V1 business notes.
 10. API layer includes required route families with placeholders for CRUD/pagination shape.
 11-13. Next.js frontend initialized with dashboard/nav/accounts/import/clients/shares pages.
 14. Manual NAV workflow components implemented across import/rate/price/nav services.
-15. Basic compile checks completed in current environment.
+15. Shares page now supports real subscribe/redeem flows and displays current balances.
+16. Basic compile checks + smoke script coverage updated in current environment.

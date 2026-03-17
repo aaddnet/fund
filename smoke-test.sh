@@ -23,7 +23,7 @@ curl -fsS "$BASE_URL/health/db" | tee /tmp/invest-health-db.json && echo
 
 echo "== Seed demo data =="
 cat <<'SQL' | docker exec -i "$DB_CONTAINER" psql -U fund_user -d fund_system >/dev/null
-INSERT INTO fund (id, name, base_currency, total_shares) VALUES (1, 'Demo Fund', 'USD', 1000) ON CONFLICT (id) DO NOTHING;
+INSERT INTO fund (id, name, base_currency, total_shares) VALUES (1, 'Demo Fund', 'USD', 0) ON CONFLICT (id) DO UPDATE SET total_shares = EXCLUDED.total_shares;
 INSERT INTO client (id, name, email) VALUES (1, 'Alice', 'alice@example.com') ON CONFLICT (id) DO NOTHING;
 INSERT INTO account (id, fund_id, client_id, broker, account_no) VALUES (1, 1, 1, 'IB', 'ACC-001') ON CONFLICT (id) DO NOTHING;
 INSERT INTO account (id, fund_id, client_id, broker, account_no) VALUES (2, 1, 1, 'HK Broker', 'ACC-HKD-01') ON CONFLICT (id) DO NOTHING;
@@ -48,6 +48,8 @@ VALUES
   ('HKD', 'USD', 0.12820513, DATE '2026-03-31'),
   ('HKD', 'USD', 0.12700000, DATE '2026-06-30')
 ON CONFLICT (base_currency, quote_currency, snapshot_date) DO NOTHING;
+DELETE FROM share_transaction WHERE fund_id = 1;
+DELETE FROM fee_record WHERE fund_id = 1;
 SQL
 
 echo "== Import flow =="
@@ -75,8 +77,10 @@ echo "== Business flow =="
 curl -fsS -X POST "$BASE_URL/nav/calc" -H 'Content-Type: application/json' -d '{"fund_id":1,"nav_date":"2026-03-31"}' | tee /tmp/invest-nav1.json && echo
 curl -fsS -X POST "$BASE_URL/nav/calc" -H 'Content-Type: application/json' -d '{"fund_id":1,"nav_date":"2026-06-30"}' | tee /tmp/invest-nav2.json && echo
 curl -fsS "$BASE_URL/nav" | tee /tmp/invest-nav-list.json && echo
-curl -fsS -X POST "$BASE_URL/share/subscribe" -H 'Content-Type: application/json' -d '{"fund_id":1,"client_id":1,"tx_date":"2026-06-30","amount_usd":500}' | tee /tmp/invest-share.json && echo
-curl -fsS "$BASE_URL/share/history" | tee /tmp/invest-share-history.json && echo
+curl -fsS -X POST "$BASE_URL/share/subscribe" -H 'Content-Type: application/json' -d '{"fund_id":1,"client_id":1,"tx_date":"2026-06-30","amount_usd":500}' | tee /tmp/invest-share-subscribe.json && echo
+curl -fsS -X POST "$BASE_URL/share/redeem" -H 'Content-Type: application/json' -d '{"fund_id":1,"client_id":1,"tx_date":"2026-06-30","amount_usd":200}' | tee /tmp/invest-share-redeem.json && echo
+curl -fsS "$BASE_URL/share/history?fund_id=1&client_id=1" | tee /tmp/invest-share-history.json && echo
+curl -fsS "$BASE_URL/share/balances?fund_id=1" | tee /tmp/invest-share-balances.json && echo
 curl -fsS -X POST "$BASE_URL/fee/calc" -H 'Content-Type: application/json' -d '{"fund_id":1,"fee_date":"2026-09-30"}' | tee /tmp/invest-fee.json && echo
 curl -fsS "$BASE_URL/fee" | tee /tmp/invest-fee-list.json && echo
 
