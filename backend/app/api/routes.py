@@ -5,12 +5,12 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Account, AssetPrice, Client, ExchangeRate, FeeRecord, Fund, NAVRecord, Position, Transaction
+from app.models import Account, AssetPrice, AuthUser, Client, ExchangeRate, FeeRecord, Fund, NAVRecord, Position, Transaction
 from app.schemas.common import FeeCalcRequest, NavCalcRequest, PriceFetchRequest, RateFetchRequest, ShareRequest
 from app.services.audit import list_audit_logs, record_audit
 from app.services.auth import (
@@ -20,8 +20,10 @@ from app.services.auth import (
     Actor,
     apply_client_scope_filters,
     get_actor,
+    login_with_password,
     require_client_scope,
     require_roles,
+    revoke_session,
 )
 from app.services.exchange_rate import fetch_and_save_rates
 from app.services.fee_service import calc_fee, list_fees
@@ -35,6 +37,41 @@ router = APIRouter()
 DEFAULT_PAGE = 1
 DEFAULT_SIZE = 20
 MAX_SIZE = 200
+
+
+@router.post("/auth/login")
+def auth_login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    session = login_with_password(db, username=username, password=password)
+    return {
+        "access_token": session.token,
+        "token_type": "bearer",
+        "expires_at": session.expires_at.isoformat(),
+        "user": _serialize_auth_user(session.user),
+    }
+
+
+@router.get("/auth/me")
+def auth_me(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    user = db.query(AuthUser).filter(AuthUser.id == actor.user_id).first() if actor.user_id else None
+    return {
+        "actor": {
+            "role": actor.role,
+            "operator_id": actor.operator_id,
+            "client_scope_id": actor.client_scope_id,
+            "auth_mode": actor.auth_mode,
+            "session_id": actor.session_id,
+            "username": actor.username,
+        },
+        "user": _serialize_auth_user(user) if user else None,
+    }
+
+
+@router.post("/auth/logout", status_code=204)
+def auth_logout(response: Response, actor: Actor = Depends(get_actor), db: Session = Depends(get_db)):
+    if actor.session_id:
+        revoke_session(db, actor.session_id)
+    response.status_code = 204
+    return response
 
 
 @router.post("/rates/fetch")
@@ -729,6 +766,22 @@ def _serialize_rate(item: ExchangeRate) -> dict:
         "quote_currency": item.quote_currency,
         "rate": _decimal(item.rate),
         "snapshot_date": item.snapshot_date.isoformat(),
+        "created_at": _iso(item.created_at),
+        "updated_at": _iso(item.updated_at),
+    }
+
+
+def _serialize_auth_user(item: Optional[AuthUser]) -> Optional[dict]:
+    if item is None:
+        return None
+    return {
+        "id": item.id,
+        "username": item.username,
+        "role": item.role,
+        "client_scope_id": item.client_scope_id,
+        "display_name": item.display_name,
+        "is_active": item.is_active,
+        "last_login_at": _iso(item.last_login_at),
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }

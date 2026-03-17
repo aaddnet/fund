@@ -187,6 +187,30 @@ CREATE TABLE IF NOT EXISTS scheduler_job_run (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS auth_user (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL,
+    client_scope_id INT REFERENCES client(id),
+    display_name VARCHAR(255),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    last_login_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS auth_session (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES auth_user(id),
+    session_token_hash VARCHAR(255) NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    last_seen_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 ALTER TABLE transaction
     ADD CONSTRAINT fk_transaction_import_batch
     FOREIGN KEY (import_batch_id) REFERENCES import_batch(id);

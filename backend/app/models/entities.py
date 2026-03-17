@@ -202,3 +202,27 @@ class SchedulerJobRun(Base, TimestampMixin):
             return json.loads(self.detail_json or "{}")
         except json.JSONDecodeError:
             return {}
+
+
+class AuthUser(Base, TimestampMixin):
+    __tablename__ = "auth_user"
+    __table_args__ = (UniqueConstraint("username"),)
+    id = Column(Integer, primary_key=True)
+    username = Column(String(100), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(50), nullable=False)
+    client_scope_id = Column(Integer, ForeignKey("client.id"))
+    display_name = Column(String(255))
+    is_active = Column(Boolean, nullable=False, default=True)
+    last_login_at = Column(DateTime(timezone=True))
+
+
+class AuthSession(Base, TimestampMixin):
+    __tablename__ = "auth_session"
+    __table_args__ = (UniqueConstraint("session_token_hash"),)
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("auth_user.id"), nullable=False)
+    session_token_hash = Column(String(255), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True))
+    last_seen_at = Column(DateTime(timezone=True))

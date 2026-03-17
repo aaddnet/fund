@@ -3,7 +3,9 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
 WEB_URL="${WEB_URL:-http://127.0.0.1:3000}"
-DB_CONTAINER="${DB_CONTAINER:-fund_system_db}"
+AUTH_USER="${AUTH_USER:-ops}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-ops123}"
+DB_CONTAINER="${DB_CONTAINER:-invest_local_db}"
 
 TMP_CSV="$(mktemp /tmp/invest-import-XXXXXX.csv)"
 cat > "$TMP_CSV" <<'CSV'
@@ -17,9 +19,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
+login() {
+  curl -fsS -X POST "$BASE_URL/auth/login" \
+    -F "username=$AUTH_USER" \
+    -F "password=$AUTH_PASSWORD"
+}
+
+TOKEN="$(login | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+AUTH_HEADER=( -H "Authorization: Bearer $TOKEN" )
+
 echo "== Health checks =="
-curl -fsS "$BASE_URL/health" | tee /tmp/invest-health.json && echo
-curl -fsS "$BASE_URL/health/db" | tee /tmp/invest-health-db.json && echo
+curl -fsS "$BASE_URL/health" && echo
+curl -fsS "$BASE_URL/health/db" && echo
+
+echo "== Who am I =="
+curl -fsS "${AUTH_HEADER[@]}" "$BASE_URL/auth/me" && echo
 
 echo "== Seed demo data =="
 cat <<'SQL' | docker exec -i "$DB_CONTAINER" psql -U fund_user -d fund_system >/dev/null
@@ -53,55 +67,27 @@ DELETE FROM fee_record WHERE fund_id = 1;
 SQL
 
 echo "== Import flow =="
-curl -fsS -X POST "$BASE_URL/import/upload" \
-  -F "source=csv" \
-  -F "account_id=1" \
-  -F "file=@$TMP_CSV;type=text/csv" | tee /tmp/invest-import-upload.json && echo
-IMPORT_BATCH_ID="$(python3 - <<'PY'
-import json
-with open('/tmp/invest-import-upload.json') as fh:
-    data = json.load(fh)
-print(data['id'])
-PY
-)"
-curl -fsS -H 'x-dev-role: ops' "$BASE_URL/import/$IMPORT_BATCH_ID" | tee /tmp/invest-import-detail.json && echo
-curl -fsS -X POST -H 'x-dev-role: ops' -H 'x-operator-id: smoke' "$BASE_URL/import/$IMPORT_BATCH_ID/confirm" | tee /tmp/invest-import-confirm.json && echo
-
-echo "== Read APIs =="
-curl -fsS "$BASE_URL/fund?page=1&size=10" | tee /tmp/invest-funds.json && echo
-curl -fsS "$BASE_URL/account?page=1&size=10&fund_id=1" | tee /tmp/invest-accounts.json && echo
-curl -fsS "$BASE_URL/position?page=1&size=10&fund_id=1&snapshot_date=2026-03-31" | tee /tmp/invest-positions.json && echo
-curl -fsS "$BASE_URL/transaction?page=1&size=10&fund_id=1" | tee /tmp/invest-transactions.json && echo
+IMPORT_BATCH_ID="$(curl -fsS -X POST "$BASE_URL/import/upload" "${AUTH_HEADER[@]}" -F "source=csv" -F "account_id=1" -F "file=@$TMP_CSV;type=text/csv" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+curl -fsS "${AUTH_HEADER[@]}" "$BASE_URL/import/$IMPORT_BATCH_ID" && echo
+curl -fsS -X POST "${AUTH_HEADER[@]}" "$BASE_URL/import/$IMPORT_BATCH_ID/confirm" && echo
 
 echo "== Business flow =="
-curl -fsS -X POST "$BASE_URL/nav/calc" -H 'Content-Type: application/json' -d '{"fund_id":1,"nav_date":"2026-03-31"}' | tee /tmp/invest-nav1.json && echo
-curl -fsS -X POST "$BASE_URL/nav/calc" -H 'Content-Type: application/json' -d '{"fund_id":1,"nav_date":"2026-06-30"}' | tee /tmp/invest-nav2.json && echo
-curl -fsS "$BASE_URL/nav" | tee /tmp/invest-nav-list.json && echo
-curl -fsS -X POST "$BASE_URL/share/subscribe" -H 'Content-Type: application/json' -d '{"fund_id":1,"client_id":1,"tx_date":"2026-06-30","amount_usd":500}' | tee /tmp/invest-share-subscribe.json && echo
-curl -fsS -X POST "$BASE_URL/share/redeem" -H 'Content-Type: application/json' -d '{"fund_id":1,"client_id":1,"tx_date":"2026-06-30","amount_usd":200}' | tee /tmp/invest-share-redeem.json && echo
-curl -fsS "$BASE_URL/share/history?fund_id=1&client_id=1" | tee /tmp/invest-share-history.json && echo
-curl -fsS "$BASE_URL/share/balances?fund_id=1" | tee /tmp/invest-share-balances.json && echo
-curl -fsS -X POST "$BASE_URL/fee/calc" -H 'Content-Type: application/json' -d '{"fund_id":1,"fee_date":"2026-09-30"}' | tee /tmp/invest-fee.json && echo
-curl -fsS "$BASE_URL/fee" | tee /tmp/invest-fee-list.json && echo
+curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/nav/calc" -d '{"fund_id":1,"nav_date":"2026-03-31"}' && echo
+curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/nav/calc" -d '{"fund_id":1,"nav_date":"2026-06-30"}' && echo
+curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/share/subscribe" -d '{"fund_id":1,"client_id":1,"tx_date":"2026-06-30","amount_usd":500}' && echo
+curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/share/redeem" -d '{"fund_id":1,"client_id":1,"tx_date":"2026-06-30","amount_usd":200}' && echo
+curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/fee/calc" -d '{"fund_id":1,"fee_date":"2026-09-30"}' && echo
 
-echo "== Frontend =="
-curl -fsSI "$WEB_URL" | sed -n '1,8p'
-
-echo "Smoke test completed successfully."
- successfully."
-09-30"}' | tee /tmp/invest-fee.json && echo
-curl -fsS -H 'x-dev-role: ops' "$BASE_URL/fee" | tee /tmp/invest-fee-list.json && echo
-
-echo "== Scheduler and audit =="
-curl -fsS -X POST "$BASE_URL/scheduler/jobs/fx-weekly/run" -H 'x-dev-role: ops' -H 'x-operator-id: smoke' | tee /tmp/invest-scheduler-run.json && echo
-curl -fsS -H 'x-dev-role: ops' "$BASE_URL/scheduler/jobs?limit=10" | tee /tmp/invest-scheduler-jobs.json && echo
-curl -fsS -H 'x-dev-role: ops' "$BASE_URL/audit?limit=20" | tee /tmp/invest-audit.json && echo
-
+echo "== Scheduler + audit =="
+curl -fsS -X POST "${AUTH_HEADER[@]}" "$BASE_URL/scheduler/jobs/fx-weekly/run" && echo
+curl -fsS "${AUTH_HEADER[@]}" "$BASE_URL/scheduler/jobs?limit=10" && echo
+curl -fsS "${AUTH_HEADER[@]}" "$BASE_URL/audit?limit=20" && echo
 
 echo "== Client readonly boundary =="
-curl -fsS -H 'x-dev-role: client-readonly' -H 'x-client-id: 1' "$BASE_URL/customer/1" | tee /tmp/invest-customer-1.json && echo
-curl -sS -o /tmp/invest-customer-2-denied.txt -w '%{http_code}' -H 'x-dev-role: client-readonly' -H 'x-client-id: 1' "$BASE_URL/customer/2" | tee /tmp/invest-customer-2-code.txt && echo
-if [[ "$(cat /tmp/invest-customer-2-code.txt)" != "403" ]]; then
+CLIENT_TOKEN="$(curl -fsS -X POST "$BASE_URL/auth/login" -F 'username=client1' -F 'password=client123' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+curl -fsS -H "Authorization: Bearer $CLIENT_TOKEN" "$BASE_URL/customer/1" && echo
+STATUS_CODE="$(curl -sS -o /tmp/invest-customer-2-denied.txt -w '%{http_code}' -H "Authorization: Bearer $CLIENT_TOKEN" "$BASE_URL/customer/2")"
+if [[ "$STATUS_CODE" != "403" ]]; then
   echo "Expected client-readonly access to other customer to be forbidden" >&2
   exit 1
 fi
