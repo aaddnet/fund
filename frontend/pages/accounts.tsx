@@ -3,7 +3,9 @@ import { useMemo, useState } from 'react';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import FormField from '../components/FormField';
-import { Account, Client, Fund, getAccounts, getClients, getFunds, createAccount } from '../lib/api';
+import Modal from '../components/Modal';
+import { useToast } from '../components/Toast';
+import { Account, Client, Fund, getAccounts, getClients, getFunds, createAccount, updateAccount } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { requirePageAuth } from '../lib/pageAuth';
@@ -26,28 +28,64 @@ type Props = {
 export default function Page({ rows, total, funds, clients, filters, error }: Props) {
   const { t } = useI18n();
   const { hasPermission } = useAuth();
+  const { showToast } = useToast();
   const canWrite = hasPermission('accounts.write');
   const activeFilterCount = useMemo(() => [filters.fundId, filters.clientId, filters.broker, filters.q].filter(Boolean).length, [filters]);
+
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
 
   const [fundId, setFundId] = useState('');
   const [clientId, setClientId] = useState('');
   const [broker, setBroker] = useState('');
   const [accountNo, setAccountNo] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [submitState, setSubmitState] = useState('');
+
+  function openCreate() {
+    setFundId('');
+    setClientId('');
+    setBroker('');
+    setAccountNo('');
+    setIsCreateOpen(true);
+  }
+
+  function openEdit(account: Account) {
+    setFundId(String(account.fund_id));
+    setClientId(String(account.client_id || ''));
+    setBroker(account.broker);
+    setAccountNo(account.account_no);
+    setEditingAccount(account);
+  }
+
+  function closeModals() {
+    setIsCreateOpen(false);
+    setEditingAccount(null);
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!canWrite) return;
     setSubmitting(true);
-    setSubmitState('');
     try {
       await createAccount({ fund_id: Number(fundId), client_id: Number(clientId), broker, account_no: accountNo });
-      setSubmitState('Success! Refreshing...');
+      showToast('Account created successfully', 'success');
       window.location.reload();
     } catch (err) {
-      setSubmitState(err instanceof Error ? err.message : 'Failed');
-    } finally {
+      showToast(err instanceof Error ? err.message : 'Failed to create account', 'error');
+      setSubmitting(false);
+    }
+  }
+
+  async function handleEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canWrite || !editingAccount) return;
+    setSubmitting(true);
+    try {
+      await updateAccount(editingAccount.id, { fund_id: Number(fundId), client_id: Number(clientId), broker, account_no: accountNo });
+      showToast('Account updated successfully', 'success');
+      window.location.reload();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to update account', 'error');
       setSubmitting(false);
     }
   }
@@ -56,37 +94,13 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
     <Layout title={t('accountsTitle')} subtitle={t('accountsSubtitle')} requiredPermission='accounts.read'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>{t('backendWarning')}: {error}</div> : null}
 
-      <div style={styles.grid2}>
-        <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Create Account</h3>
-          <form onSubmit={handleCreate} style={{ display: 'grid', gap: 14 }}>
-            <FormField label="Fund">
-              <select required style={styles.input} value={fundId} onChange={e => setFundId(e.target.value)} disabled={!canWrite}>
-                <option value="">Select Fund</option>
-                {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-              </select>
-            </FormField>
-            <FormField label="Client">
-              <select required style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={!canWrite}>
-                <option value="">Select Client</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </FormField>
-            <FormField label="Broker">
-              <input required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={!canWrite} />
-            </FormField>
-            <FormField label="Account No">
-              <input required style={styles.input} value={accountNo} onChange={e => setAccountNo(e.target.value)} disabled={!canWrite} />
-            </FormField>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <button style={styles.buttonPrimary} disabled={submitting || !canWrite} type="submit">
-                {submitting ? 'Creating...' : 'Create Account'}
-              </button>
-              {submitState && <span style={{ color: submitState.includes('Success') ? colors.success : colors.danger }}>{submitState}</span>}
-            </div>
-          </form>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        {canWrite && (
+          <button style={styles.buttonPrimary} onClick={openCreate}>+ Create Account</button>
+        )}
+      </div>
 
+      <div style={styles.grid2}>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>{t('accountFilters')}</h3>
           <form method='get' style={{ display: 'grid', gap: 12 }}>
@@ -150,9 +164,78 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
             { key: 'transactions', title: t('transactions'), render: (item) => item.transaction_count },
             { key: 'trade', title: t('latestTrade'), render: (item) => item.latest_trade_date || t('notAvailable') },
             { key: 'snapshot', title: t('latestSnapshot'), render: (item) => item.latest_snapshot_date || t('notAvailable') },
+            ...(canWrite ? [{
+              key: 'actions', title: 'Actions', render: (item: Account) => (
+                <button
+                  style={{ ...styles.buttonSecondary, padding: '4px 8px', fontSize: 12 }}
+                  onClick={() => openEdit(item)}
+                >
+                  Edit
+                </button>
+              )
+            }] : [])
           ]}
         />
       </div>
+
+      <Modal isOpen={isCreateOpen} onClose={closeModals} title="Create Account">
+        <form onSubmit={handleCreate} style={{ display: 'grid', gap: 14 }}>
+          <FormField label="Fund">
+            <select required style={styles.input} value={fundId} onChange={e => setFundId(e.target.value)} disabled={submitting}>
+              <option value="">Select Fund</option>
+              {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Client">
+            <select required style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
+              <option value="">Select Client</option>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Broker">
+            <input required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={submitting} />
+          </FormField>
+          <FormField label="Account No">
+            <input required style={styles.input} value={accountNo} onChange={e => setAccountNo(e.target.value)} disabled={submitting} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button type="button" onClick={closeModals} style={styles.buttonSecondary} disabled={submitting}>Cancel</button>
+            <button style={styles.buttonPrimary} disabled={submitting} type="submit">
+              {submitting ? 'Creating...' : 'Create'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={!!editingAccount} onClose={closeModals} title="Edit Account">
+        <form onSubmit={handleEdit} style={{ display: 'grid', gap: 14 }}>
+          <FormField label="Fund">
+            <select required style={styles.input} value={fundId} onChange={e => setFundId(e.target.value)} disabled={submitting}>
+              <option value="">Select Fund</option>
+              {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Client">
+            <select required style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
+              <option value="">Select Client</option>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Broker">
+            <input required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={submitting} />
+          </FormField>
+          <FormField label="Account No">
+            <input required style={styles.input} value={accountNo} onChange={e => setAccountNo(e.target.value)} disabled={submitting} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button type="button" onClick={closeModals} style={styles.buttonSecondary} disabled={submitting}>Cancel</button>
+            <button style={styles.buttonPrimary} disabled={submitting} type="submit">
+              {submitting ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
     </Layout>
   );
 }

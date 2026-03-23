@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { useRouter } from 'next/router';
 import { AuthProvider, useAuth } from '../lib/auth';
 import { I18nProvider, useI18n } from '../lib/i18n';
+import { ToastProvider } from '../components/Toast';
 import { styles } from '../lib/ui';
 
 const PUBLIC_ROUTES = new Set(['/login', '/auth/complete']);
@@ -32,9 +33,11 @@ export default function App({ Component, pageProps }: AppProps<{ initialUser?: a
   return (
     <I18nProvider initialLocale={pageProps.initialLocale}>
       <AuthProvider initialUser={pageProps.initialUser}>
-        <RouteGuard>
-          <Component {...pageProps} />
-        </RouteGuard>
+        <ToastProvider>
+          <RouteGuard>
+            <Component {...pageProps} />
+          </RouteGuard>
+        </ToastProvider>
       </AuthProvider>
     </I18nProvider>
   );
