@@ -1,10 +1,13 @@
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import StatCard from '../components/StatCard';
+import TrendChart from '../components/TrendChart';
+import Link from 'next/link';
+import { useAuth } from '../lib/auth';
 import { getAccounts, getFees, getHealth, getHealthDb, getNav, getPositions, getShareHistory, Account, NavRecord, FeeRecord, Position, ShareTransaction } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { requirePageAuth } from '../lib/pageAuth';
-import { formatNumber, styles } from '../lib/ui';
+import { formatNumber, styles, colors } from '../lib/ui';
 
 type Props = {
   health: string;
@@ -19,13 +22,35 @@ type Props = {
 
 export default function Page({ health, db, nav, shares, fees, accounts, positions, error }: Props) {
   const { t } = useI18n();
+  const { hasPermission } = useAuth();
   const latestNav = nav[0];
   const latestSnapshotDate = positions[0]?.snapshot_date ?? t('notAvailable');
   const totalPositions = positions.length;
 
+  const navTrendData = nav.slice(0, 10).reverse().map(item => ({
+    label: `${item.nav_date} (Fund #${item.fund_id})`,
+    value: item.nav_per_share
+  }));
+
   return (
     <Layout title={t('dashboardTitle')} subtitle={t('dashboardSubtitle')} requiredPermission='dashboard.read'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: '#dc2626' }}>{t('backendWarning')}: {error}</div> : null}
+
+      {/* Quick Actions Row */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
+        {hasPermission('nav.write') && (
+          <Link href="/nav" style={{ ...styles.buttonPrimary, textDecoration: 'none', backgroundColor: colors.success }}>+ Calculate NAV</Link>
+        )}
+        {hasPermission('import.write') && (
+          <Link href="/import" style={{ ...styles.buttonPrimary, textDecoration: 'none', backgroundColor: colors.primary }}>+ Upload CSV</Link>
+        )}
+        {hasPermission('shares.write') && (
+          <Link href="/shares" style={{ ...styles.buttonPrimary, textDecoration: 'none', backgroundColor: colors.warning }}>+ Share Tx</Link>
+        )}
+        {hasPermission('accounts.write') && (
+          <Link href="/accounts" style={{ ...styles.buttonSecondary, textDecoration: 'none' }}>+ New Account</Link>
+        )}
+      </div>
 
       <div style={styles.grid3}>
         <StatCard label={t('apiHealth')} value={health.toUpperCase()} tone={health === 'ok' ? 'success' : 'warning'} />
@@ -41,6 +66,10 @@ export default function Page({ health, db, nav, shares, fees, accounts, position
 
       <div style={{ ...styles.grid2, marginTop: 16 }}>
         <div style={styles.card}>
+          <h3 style={{ marginTop: 0 }}>NAV Trend (Last 10)</h3>
+          <TrendChart data={navTrendData} />
+        </div>
+        <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>{t('recentNavRecords')}</h3>
           <ProductTable
             emptyText={t('noNavRecords')}
@@ -53,6 +82,9 @@ export default function Page({ health, db, nav, shares, fees, accounts, position
             ]}
           />
         </div>
+      </div>
+
+      <div style={{ ...styles.grid2, marginTop: 16 }}>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>{t('recentAccounts')}</h3>
           <ProductTable
@@ -67,9 +99,6 @@ export default function Page({ health, db, nav, shares, fees, accounts, position
             ]}
           />
         </div>
-      </div>
-
-      <div style={{ ...styles.grid2, marginTop: 16 }}>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>{t('recentShareTransactions')}</h3>
           <ProductTable
@@ -83,6 +112,9 @@ export default function Page({ health, db, nav, shares, fees, accounts, position
             ]}
           />
         </div>
+      </div>
+
+      <div style={{ ...styles.grid2, marginTop: 16 }}>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>{t('latestPositionSnapshot')}</h3>
           <ProductTable
@@ -97,20 +129,19 @@ export default function Page({ health, db, nav, shares, fees, accounts, position
             ]}
           />
         </div>
-      </div>
-
-      <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>{t('feeRecords')}</h3>
-        <ProductTable
-          emptyText={t('noFeeRecords')}
-          rows={fees}
-          columns={[
-            { key: 'date', title: 'Fee Date', render: (item) => item.fee_date },
-            { key: 'gross', title: 'Gross Return', render: (item) => `${formatNumber(item.gross_return, 5)}` },
-            { key: 'rate', title: 'Fee Rate', render: (item) => `${formatNumber(item.fee_rate, 4)}` },
-            { key: 'amount', title: t('amountUsd'), render: (item) => formatNumber(item.fee_amount_usd) },
-          ]}
-        />
+        <div style={styles.card}>
+          <h3 style={{ marginTop: 0 }}>{t('feeRecords')}</h3>
+          <ProductTable
+            emptyText={t('noFeeRecords')}
+            rows={fees.slice(0, 5)}
+            columns={[
+              { key: 'date', title: 'Fee Date', render: (item) => item.fee_date },
+              { key: 'gross', title: 'Gross Return', render: (item) => `${formatNumber(item.gross_return, 5)}` },
+              { key: 'rate', title: 'Fee Rate', render: (item) => `${formatNumber(item.fee_rate, 4)}` },
+              { key: 'amount', title: t('amountUsd'), render: (item) => formatNumber(item.fee_amount_usd) },
+            ]}
+          />
+        </div>
       </div>
     </Layout>
   );
