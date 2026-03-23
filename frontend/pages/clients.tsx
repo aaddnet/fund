@@ -1,7 +1,10 @@
 import Link from 'next/link';
+import { useState } from 'react';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
-import { Client, Fund, getClients, getFunds } from '../lib/api';
+import FormField from '../components/FormField';
+import { Client, Fund, getClients, getFunds, createClient } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { requirePageAuth } from '../lib/pageAuth';
 import { colors, formatNumber, styles } from '../lib/ui';
@@ -19,11 +22,50 @@ type Props = {
 
 export default function Page({ rows, total, funds, filters, error }: Props) {
   const { t } = useI18n();
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('clients.write');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitState, setSubmitState] = useState('');
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canWrite) return;
+    setSubmitting(true);
+    setSubmitState('');
+    try {
+      await createClient({ name, email: email || null });
+      setSubmitState('Success! Refreshing...');
+      window.location.reload();
+    } catch (err) {
+      setSubmitState(err instanceof Error ? err.message : 'Failed');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <Layout title={t('clientsTitle')} subtitle={t('clientsSubtitle')} requiredPermission='clients.read'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>{t('backendWarning')}: {error}</div> : null}
       <div style={styles.grid2}>
+        <div style={styles.card}>
+          <h3 style={{ marginTop: 0 }}>Create Client</h3>
+          <form onSubmit={handleCreate} style={{ display: 'grid', gap: 14 }}>
+            <FormField label="Name">
+              <input required style={styles.input} value={name} onChange={e => setName(e.target.value)} disabled={!canWrite} />
+            </FormField>
+            <FormField label="Email">
+              <input style={styles.input} type="email" value={email} onChange={e => setEmail(e.target.value)} disabled={!canWrite} />
+            </FormField>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button style={styles.buttonPrimary} disabled={submitting || !canWrite} type="submit">
+                {submitting ? 'Creating...' : 'Create Client'}
+              </button>
+              {submitState && <span style={{ color: submitState.includes('Success') ? colors.success : colors.danger }}>{submitState}</span>}
+            </div>
+          </form>
+        </div>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>{t('clientFilters')}</h3>
           <form method='get' style={{ display: 'grid', gap: 12 }}>

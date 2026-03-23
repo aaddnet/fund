@@ -32,8 +32,28 @@ class FeeCalcRequest(BaseModel):
     fee_date: date
 
 
-class ImportConfirmRequest(BaseModel):
-    batch_id: Optional[int] = None
+class ClientCreateRequest(BaseModel):
+    name: str
+    email: Optional[str] = None
+
+
+class ClientUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class AccountCreateRequest(BaseModel):
+    fund_id: int
+    client_id: int
+    broker: str
+    account_no: str
+
+
+class AccountUpdateRequest(BaseModel):
+    fund_id: Optional[int] = None
+    client_id: Optional[int] = None
+    broker: Optional[str] = None
+    account_no: Optional[str] = None
 
 
 class AuthUserCreateRequest(BaseModel):

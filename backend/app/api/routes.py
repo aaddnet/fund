@@ -17,6 +17,10 @@ from app.schemas.common import (
     AuthPasswordResetRequest,
     AuthUserCreateRequest,
     AuthUserUpdateRequest,
+    ClientCreateRequest,
+    ClientUpdateRequest,
+    AccountCreateRequest,
+    AccountUpdateRequest,
     FeeCalcRequest,
     NavCalcRequest,
     PriceFetchRequest,
@@ -457,6 +461,34 @@ def get_client(client_id: int, db: Session = Depends(get_db), actor: Actor = Dep
     return _serialize_client(db, item)
 
 
+@router.post("/client")
+def create_client(req: ClientCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.write")
+    client = Client(name=req.name, email=req.email)
+    db.add(client)
+    db.commit()
+    db.refresh(client)
+    record_audit(db, actor, action="client.create", entity_type="client", entity_id=str(client.id), detail={"name": client.name})
+    return _serialize_client(db, client)
+
+
+@router.patch("/client/{client_id}")
+def update_client(client_id: int, req: ClientUpdateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.write")
+    require_client_scope(actor, client_id)
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found.")
+    if req.name is not None:
+        client.name = req.name
+    if req.email is not None:
+        client.email = req.email
+    db.commit()
+    db.refresh(client)
+    record_audit(db, actor, action="client.update", entity_type="client", entity_id=str(client.id), detail={"name": client.name})
+    return _serialize_client(db, client)
+
+
 @router.get("/account")
 def list_accounts(
     page: int = Query(DEFAULT_PAGE, ge=1),
@@ -490,6 +522,38 @@ def get_account(account_id: int, db: Session = Depends(get_db), actor: Actor = D
     if not item:
         raise HTTPException(status_code=404, detail="Account not found.")
     require_client_scope(actor, item.client_id)
+    return _serialize_account(db, item)
+
+
+@router.post("/account")
+def create_account(req: AccountCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "accounts.write")
+    account = Account(fund_id=req.fund_id, client_id=req.client_id, broker=req.broker, account_no=req.account_no)
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    record_audit(db, actor, action="account.create", entity_type="account", entity_id=str(account.id), detail={"account_no": account.account_no})
+    return _serialize_account(db, account)
+
+
+@router.patch("/account/{account_id}")
+def update_account(account_id: int, req: AccountUpdateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "accounts.write")
+    item = db.query(Account).filter(Account.id == account_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    require_client_scope(actor, item.client_id)
+    if req.fund_id is not None:
+        item.fund_id = req.fund_id
+    if req.client_id is not None:
+        item.client_id = req.client_id
+    if req.broker is not None:
+        item.broker = req.broker
+    if req.account_no is not None:
+        item.account_no = req.account_no
+    db.commit()
+    db.refresh(item)
+    record_audit(db, actor, action="account.update", entity_type="account", entity_id=str(item.id), detail={"account_no": item.account_no})
     return _serialize_account(db, item)
 
 

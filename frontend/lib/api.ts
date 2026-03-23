@@ -524,4 +524,32 @@ export async function createShareRedemption(payload: { fund_id: number; client_i
   });
 }
 
+export async function createClient(payload: { name: string; email?: string | null }) {
+  return fetchJson<Client>('/client', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateClient(clientId: number, payload: { name?: string | null; email?: string | null }) {
+  return fetchJson<Client>(`/client/${clientId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createAccount(payload: { fund_id: number; client_id: number; broker: string; account_no: string }) {
+  return fetchJson<Account>('/account', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateAccount(accountId: number, payload: { fund_id?: number | null; client_id?: number | null; broker?: string | null; account_no?: string | null }) {
+  return fetchJson<Account>(`/account/${accountId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
 export { API_BASE, PUBLIC_API_BASE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, LOCALE_COOKIE, buildQuery, fetchJson };
