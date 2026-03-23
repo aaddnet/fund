@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
+import Modal from '../components/Modal';
+import { useToast } from '../components/Toast';
 import { confirmImportBatch, getImportBatches, ImportBatch, uploadImportBatch } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
@@ -23,13 +25,16 @@ const statusColorMap: Record<string, string> = {
 export default function Page({ batches, error }: Props) {
   const { hasPermission } = useAuth();
   const { t } = useI18n();
+  const { showToast } = useToast();
   const canWriteImport = hasPermission('import.write');
+  
   const [rows, setRows] = useState<ImportBatch[]>(batches);
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(batches[0]?.id ?? null);
+  
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [source, setSource] = useState('csv');
   const [accountId, setAccountId] = useState('1');
   const [file, setFile] = useState<File | null>(null);
-  const [submitState, setSubmitState] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const selectedBatch = useMemo(() => rows.find((item) => item.id === selectedBatchId) ?? rows[0] ?? null, [rows, selectedBatchId]);
 
@@ -44,23 +49,27 @@ export default function Page({ batches, error }: Props) {
   async function handleUpload(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canWriteImport) {
-      setSubmitState(t('permissionDenied'));
+      showToast(t('permissionDenied'), 'error');
       return;
     }
     if (!file) {
-      setSubmitState(t('chooseCsvFirst'));
+      showToast(t('chooseCsvFirst'), 'error');
       return;
     }
 
     setSubmitting(true);
-    setSubmitState('');
     try {
       const batch = await uploadImportBatch({ source, accountId: Number(accountId), file });
       mergeBatch(batch);
-      setSubmitState(batch.status === 'failed' ? batch.failed_reason || t('importParsingFailed') : t('importUploaded', { filename: batch.filename, count: batch.parsed_count }));
-      setFile(null);
+      if (batch.status === 'failed') {
+        showToast(batch.failed_reason || t('importParsingFailed'), 'error');
+      } else {
+        showToast(t('importUploaded', { filename: batch.filename, count: batch.parsed_count }), 'success');
+        setIsModalOpen(false);
+        setFile(null);
+      }
     } catch (submitError) {
-      setSubmitState(submitError instanceof Error ? submitError.message : t('importParsingFailed'));
+      showToast(submitError instanceof Error ? submitError.message : t('importParsingFailed'), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -68,17 +77,16 @@ export default function Page({ batches, error }: Props) {
 
   async function handleConfirm(batchId: number) {
     if (!canWriteImport) {
-      setSubmitState(t('permissionDenied'));
+      showToast(t('permissionDenied'), 'error');
       return;
     }
     setSubmitting(true);
-    setSubmitState('');
     try {
       const confirmed = await confirmImportBatch(batchId);
       mergeBatch(confirmed);
-      setSubmitState(t('confirmSuccess', { batchId: confirmed.id }));
+      showToast(t('confirmSuccess', { batchId: confirmed.id }), 'success');
     } catch (submitError) {
-      setSubmitState(submitError instanceof Error ? submitError.message : t('permissionDenied'));
+      showToast(submitError instanceof Error ? submitError.message : t('permissionDenied'), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -87,17 +95,16 @@ export default function Page({ batches, error }: Props) {
   return (
     <Layout title={t('importTitle')} subtitle={t('importSubtitle')} requiredPermission='import.read'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: '#dc2626' }}>{t('backendWarning')}: {error}</div> : null}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        {canWriteImport && (
+          <button style={styles.buttonPrimary} onClick={() => setIsModalOpen(true)}>+ {t('uploadCsv')}</button>
+        )}
+      </div>
+
       <div style={styles.grid2}>
-        <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>{t('uploadCsv')}</h3>
-          <form onSubmit={handleUpload} style={{ display: 'grid', gap: 14 }}>
-            <FormField label={t('source')}>
-              <input style={styles.input} value={source} onChange={(event) => setSource(event.target.value)} disabled={!canWriteImport} />
-            </FormField>
-            <FormField label={t('accountId')}>
-              <input style={styles.input} value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={!canWriteImport} />
-            </FormField>
-            <FormField label={t('csvFile')}>
+        <div style={{...styles.card, gridColumn: '1 / -1'}}>
+          <h3 style={{ marginTop: 0 }}>{t('csvFormat')}</h3>
               <input style={styles.input} type='file' accept='.csv,text/csv' onChange={(event) => setFile(event.target.files?.[0] ?? null)} disabled={!canWriteImport} />
             </FormField>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -173,6 +180,27 @@ export default function Page({ batches, error }: Props) {
           </>
         ) : null}
       </div>
+
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={t('uploadCsv')}>
+        <form onSubmit={handleUpload} style={{ display: 'grid', gap: 14 }}>
+          <FormField label={t('source')}>
+            <input style={styles.input} value={source} onChange={(event) => setSource(event.target.value)} disabled={submitting} />
+          </FormField>
+          <FormField label={t('accountId')}>
+            <input style={styles.input} value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={submitting} />
+          </FormField>
+          <FormField label={t('csvFile')}>
+            <input style={styles.input} type='file' accept='.csv' onChange={(event) => setFile(event.target.files?.[0] || null)} disabled={submitting} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button type="button" onClick={() => setIsModalOpen(false)} style={styles.buttonSecondary} disabled={submitting}>Cancel</button>
+            <button style={styles.buttonPrimary} disabled={submitting || !file} type='submit'>
+              {submitting ? t('uploading') : t('uploadAndParse')}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
     </Layout>
   );
 }

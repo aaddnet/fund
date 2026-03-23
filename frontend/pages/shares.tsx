@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
+import Modal from '../components/Modal';
+import { useToast } from '../components/Toast';
 import {
   Client,
   Fund,
@@ -32,17 +34,21 @@ type FormMode = 'subscribe' | 'redeem';
 export default function Page({ shares, balances, funds, clients, error }: Props) {
   const { hasPermission } = useAuth();
   const { t } = useI18n();
+  const { showToast } = useToast();
   const canWriteShares = hasPermission('shares.write');
+  
   const defaultFundId = String(funds[0]?.id ?? 1);
   const defaultClientId = String(clients[0]?.id ?? 1);
+  
   const [rows, setRows] = useState(shares);
   const [balanceRows, setBalanceRows] = useState(balances);
+  
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [mode, setMode] = useState<FormMode>('subscribe');
   const [fundId, setFundId] = useState(defaultFundId);
   const [clientId, setClientId] = useState(defaultClientId);
   const [txDate, setTxDate] = useState('2026-06-30');
   const [amountUsd, setAmountUsd] = useState('500');
-  const [submitState, setSubmitState] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const selectedBalance = useMemo(
@@ -50,14 +56,22 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
     [balanceRows, clientId, fundId],
   );
 
+  function openModal(newMode: FormMode) {
+    setMode(newMode);
+    setIsModalOpen(true);
+  }
+
+  function closeModal() {
+    setIsModalOpen(false);
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canWriteShares) {
-      setSubmitState(t('permissionDenied'));
+      showToast(t('permissionDenied'), 'error');
       return;
     }
     setSubmitting(true);
-    setSubmitState('');
     try {
       const payload = {
         fund_id: Number(fundId),
@@ -87,9 +101,10 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
           )
           .sort((a, b) => (a.fund_id === b.fund_id ? a.client_id - b.client_id : a.fund_id - b.fund_id));
       });
-      setSubmitState(mode === 'subscribe' ? t('subscriptionBooked', { clientId: created.client_id }) : t('redemptionBooked', { clientId: created.client_id }));
+      showToast(mode === 'subscribe' ? t('subscriptionBooked', { clientId: created.client_id }) : t('redemptionBooked', { clientId: created.client_id }), 'success');
+      closeModal();
     } catch (submitError) {
-      setSubmitState(submitError instanceof Error ? submitError.message : t('sharesFailed', { mode: mode === 'subscribe' ? t('subscribe') : t('redeem') }));
+      showToast(submitError instanceof Error ? submitError.message : t('sharesFailed', { mode: mode === 'subscribe' ? t('subscribe') : t('redeem') }), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -98,52 +113,16 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
   return (
     <Layout title={t('sharesTitle')} subtitle={t('sharesSubtitle')} requiredPermission='shares.read'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>{t('backendWarning')}: {error}</div> : null}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, gap: 10 }}>
+        {canWriteShares && (
+          <>
+            <button style={{...styles.buttonPrimary, backgroundColor: colors.success}} onClick={() => openModal('subscribe')}>+ Subscribe</button>
+            <button style={{...styles.buttonPrimary, backgroundColor: colors.danger}} onClick={() => openModal('redeem')}>- Redeem</button>
+          </>
+        )}
+      </div>
       <div style={styles.grid2}>
-        <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>{t('createShareTransaction')}</h3>
-          <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 14 }}>
-            <FormField label={t('transactionType')}>
-              <select style={styles.input} value={mode} onChange={(event) => setMode(event.target.value as FormMode)} disabled={!canWriteShares}>
-                <option value='subscribe'>{t('subscribe')}</option>
-                <option value='redeem'>{t('redeem')}</option>
-              </select>
-            </FormField>
-            <FormField label={t('fund')}>
-              <select style={styles.input} value={fundId} onChange={(event) => setFundId(event.target.value)} disabled={!canWriteShares}>
-                {funds.map((fund) => (
-                  <option key={fund.id} value={fund.id}>
-                    #{fund.id} · {fund.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label={t('client')}>
-              <select style={styles.input} value={clientId} onChange={(event) => setClientId(event.target.value)} disabled={!canWriteShares}>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    #{client.id} · {client.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label={t('transactionDate')}>
-              <input style={styles.input} type='date' value={txDate} onChange={(event) => setTxDate(event.target.value)} disabled={!canWriteShares} />
-            </FormField>
-            <FormField label={t('amountUsd')}>
-              <input style={styles.input} type='number' min='0' step='0.01' value={amountUsd} onChange={(event) => setAmountUsd(event.target.value)} disabled={!canWriteShares} />
-            </FormField>
-            <div style={{ fontSize: 13, color: colors.muted }}>
-              {t('currentClientBalance')}: <strong>{formatNumber(selectedBalance?.share_balance ?? 0, 8)}</strong> {t('sharesLabel')}
-            </div>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <button style={styles.buttonPrimary} disabled={submitting || !canWriteShares} type='submit'>
-                {submitting ? t('submitting') : mode === 'subscribe' ? t('createSubscription') : t('createRedemption')}
-              </button>
-              {!canWriteShares ? <span style={{ color: colors.warning }}>{t('readOnlyView')}</span> : null}
-              {submitState ? <span style={{ color: submitState.includes('successfully') || submitState.includes('成功') ? colors.success : colors.danger }}>{submitState}</span> : null}
-            </div>
-          </form>
-        </div>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>{t('rules')}</h3>
           <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
@@ -153,19 +132,18 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
             <li>{t('sharesRule4')}</li>
           </ul>
         </div>
-      </div>
-
-      <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>{t('currentShareBalances')}</h3>
-        <ProductTable
-          emptyText={t('noAccountsFound')}
-          rows={balanceRows}
-          columns={[
-            { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
-            { key: 'client', title: t('client'), render: (item) => item.client_id },
-            { key: 'balance', title: t('sharesLabel'), render: (item) => formatNumber(item.share_balance, 8) },
-          ]}
-        />
+        <div style={styles.card}>
+          <h3 style={{ marginTop: 0 }}>{t('currentShareBalances')}</h3>
+          <ProductTable
+            emptyText={t('noAccountsFound')}
+            rows={balanceRows}
+            columns={[
+              { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
+              { key: 'client', title: t('client'), render: (item) => item.client_id },
+              { key: 'balance', title: t('sharesLabel'), render: (item) => formatNumber(item.share_balance, 8) },
+            ]}
+          />
+        </div>
       </div>
 
       <div style={{ ...styles.card, marginTop: 16 }}>
@@ -184,6 +162,45 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
           ]}
         />
       </div>
+
+      <Modal isOpen={isModalOpen} onClose={closeModal} title={mode === 'subscribe' ? t('createSubscription') : t('createRedemption')}>
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 14 }}>
+          <FormField label={t('fund')}>
+            <select style={styles.input} value={fundId} onChange={(event) => setFundId(event.target.value)} disabled={submitting}>
+              {funds.map((fund) => (
+                <option key={fund.id} value={fund.id}>
+                  #{fund.id} · {fund.name}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label={t('client')}>
+            <select style={styles.input} value={clientId} onChange={(event) => setClientId(event.target.value)} disabled={submitting}>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  #{client.id} · {client.name}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label={t('transactionDate')}>
+            <input style={styles.input} type='date' value={txDate} onChange={(event) => setTxDate(event.target.value)} disabled={submitting} />
+          </FormField>
+          <FormField label={t('amountUsd')}>
+            <input style={styles.input} type='number' min='0' step='0.01' value={amountUsd} onChange={(event) => setAmountUsd(event.target.value)} disabled={submitting} />
+          </FormField>
+          <div style={{ fontSize: 13, color: colors.muted, marginTop: 4 }}>
+            {t('currentClientBalance')}: <strong>{formatNumber(selectedBalance?.share_balance ?? 0, 8)}</strong> {t('sharesLabel')}
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button type="button" onClick={closeModal} style={styles.buttonSecondary} disabled={submitting}>Cancel</button>
+            <button style={styles.buttonPrimary} disabled={submitting} type='submit'>
+              {submitting ? t('submitting') : mode === 'subscribe' ? t('createSubscription') : t('createRedemption')}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
     </Layout>
   );
 }
