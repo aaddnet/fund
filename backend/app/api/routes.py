@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, status, BackgroundTasks
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
@@ -33,13 +34,16 @@ from app.services.auth import (
     admin_reset_password,
     apply_client_scope_filters,
     change_password,
- main
+    create_auth_user,
+    get_actor,
+    list_auth_users,
     login_with_password,
     refresh_access_token,
     require_client_scope,
     require_permissions,
     require_roles,
     revoke_session,
+    update_auth_user,
     permissions_for_role,
 )
 from app.services.exchange_rate import fetch_and_save_rates

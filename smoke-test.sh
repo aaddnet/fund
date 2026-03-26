@@ -41,6 +41,9 @@ INSERT INTO fund (id, name, base_currency, total_shares) VALUES (1, 'Demo Fund',
 INSERT INTO client (id, name, email) VALUES (1, 'Alice', 'alice@example.com') ON CONFLICT (id) DO NOTHING;
 INSERT INTO account (id, fund_id, client_id, broker, account_no) VALUES (1, 1, 1, 'IB', 'ACC-001') ON CONFLICT (id) DO NOTHING;
 INSERT INTO account (id, fund_id, client_id, broker, account_no) VALUES (2, 1, 1, 'HK Broker', 'ACC-HKD-01') ON CONFLICT (id) DO NOTHING;
+SELECT setval('client_id_seq', (SELECT MAX(id) FROM client));
+SELECT setval('account_id_seq', (SELECT MAX(id) FROM account));
+SELECT setval('fund_id_seq', (SELECT MAX(id) FROM fund));
 INSERT INTO position (account_id, asset_code, quantity, average_cost, currency, snapshot_date)
 VALUES
   (1, 'AAPL', 10, 150, 'USD', DATE '2026-03-31'),
