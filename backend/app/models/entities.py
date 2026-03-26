@@ -51,15 +51,6 @@ class Account(Base, TimestampMixin):
     account_no = Column(String(100), nullable=False)
 
 
-class Holding(Base, TimestampMixin):
-    __tablename__ = "holding"
-    __table_args__ = (UniqueConstraint("account_id", "asset_code", "as_of_date", name="uq_holding_account_asset_date"),)
-    id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
-    asset_code = Column(String(50), nullable=False)
-    quantity = Column(Numeric(24, 8), nullable=False)
-    as_of_date = Column(Date, nullable=False)
-
 
 class Position(Base, TimestampMixin):
     __tablename__ = "position"

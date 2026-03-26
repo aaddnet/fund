@@ -8,7 +8,7 @@ from app.models import AssetPrice
 def _fetch_price(asset_code: str) -> tuple[float, str]:
     try:
         ticker = yf.Ticker(asset_code)
-        p = ticker.fast_info.get("lastPrice")
+        p = ticker.fast_info.last_price
         if p:
             return float(p), "yfinance"
     except Exception:

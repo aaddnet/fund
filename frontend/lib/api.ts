@@ -394,16 +394,17 @@ export async function logout(accessToken?: string | null) {
 }
 
 export function buildSessionCookies(session: AuthSessionResponse) {
+  const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
   return [
-    `${ACCESS_TOKEN_COOKIE}=${encodeURIComponent(session.access_token)}; path=/; SameSite=Lax`,
-    `${REFRESH_TOKEN_COOKIE}=${encodeURIComponent(session.refresh_token)}; path=/; SameSite=Lax`,
+    `${ACCESS_TOKEN_COOKIE}=${encodeURIComponent(session.access_token)}; path=/; SameSite=Strict${secure}`,
+    `${REFRESH_TOKEN_COOKIE}=${encodeURIComponent(session.refresh_token)}; path=/; SameSite=Strict${secure}`,
   ];
 }
 
 export function clearSessionCookies() {
   if (typeof document === 'undefined') return;
-  document.cookie = `${ACCESS_TOKEN_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax`;
-  document.cookie = `${REFRESH_TOKEN_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax`;
+  document.cookie = `${ACCESS_TOKEN_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict`;
+  document.cookie = `${REFRESH_TOKEN_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict`;
 }
 
 export function persistSessionCookies(session: AuthSessionResponse) {

@@ -1023,29 +1023,34 @@ def _clear_auth_cookies(response: Response) -> None:
 
 def _resolve_period(period_type: str, period_value: str) -> tuple[date, date]:
     period_type = period_type.lower()
-    if period_type == "month":
-        year_text, month_text = period_value.split("-")
-        year = int(year_text)
-        month = int(month_text)
-        end_day = monthrange(year, month)[1]
-        return date(year, month, 1), date(year, month, end_day)
+    try:
+        if period_type == "month":
+            year_text, month_text = period_value.split("-")
+            year = int(year_text)
+            month = int(month_text)
+            end_day = monthrange(year, month)[1]
+            return date(year, month, 1), date(year, month, end_day)
 
-    if period_type == "quarter":
-        year_text, quarter_text = period_value.split("-Q")
-        year = int(year_text)
-        quarter = int(quarter_text)
-        if quarter not in {1, 2, 3, 4}:
-            raise HTTPException(status_code=400, detail="quarter must be between 1 and 4")
-        start_month = (quarter - 1) * 3 + 1
-        end_month = start_month + 2
-        end_day = monthrange(year, end_month)[1]
-        return date(year, start_month, 1), date(year, end_month, end_day)
+        if period_type == "quarter":
+            year_text, quarter_text = period_value.split("-Q")
+            year = int(year_text)
+            quarter = int(quarter_text)
+            if quarter not in {1, 2, 3, 4}:
+                raise HTTPException(status_code=400, detail="quarter must be between 1 and 4")
+            start_month = (quarter - 1) * 3 + 1
+            end_month = start_month + 2
+            end_day = monthrange(year, end_month)[1]
+            return date(year, start_month, 1), date(year, end_month, end_day)
 
-    if period_type == "year":
-        year = int(period_value)
-        return date(year, 1, 1), date(year, 12, 31)
+        if period_type == "year":
+            year = int(period_value)
+            return date(year, 1, 1), date(year, 12, 31)
 
-    raise HTTPException(status_code=400, detail="period_type must be month, quarter, or year")
+        raise HTTPException(status_code=400, detail="period_type must be month, quarter, or year")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"invalid period_value '{period_value}' for period_type '{period_type}'")
 
 
 def _decimal(value):

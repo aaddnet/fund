@@ -222,47 +222,7 @@ def _parse_csv_rows(content: bytes) -> list[dict[str, Any]]:
 
 
 def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    position_state: dict[tuple[str, str], dict[str, Decimal]] = defaultdict(lambda: {"quantity": Decimal("0"), "cost_basis": Decimal("0")})
-    snapshots: dict[tuple[str, str, str], dict[str, Decimal | str | date]] = {}
 
-    for item in sorted(preview_rows, key=lambda row: (row["snapshot_date"], row["trade_date"], row["row_number"], row["asset_code"])):
-        position_key = (item["asset_code"], item["currency"])
-        state = position_state[position_key]
-        quantity = Decimal(str(item["quantity"]))
-        price = Decimal(str(item["price"]))
-        fee = Decimal(str(item.get("fee", "0")))
-
-        if quantity > 0:
-            state["quantity"] += quantity
-            state["cost_basis"] += (quantity * price) + fee
-        else:
-            sell_quantity = quantity.copy_abs()
-            current_quantity = state["quantity"]
-            if current_quantity <= 0 or sell_quantity > current_quantity:
-                raise ValueError(f"Row {item['row_number']}: sell quantity exceeds current position for {item['asset_code']}")
-            average_cost = (state["cost_basis"] / current_quantity) if current_quantity != 0 else Decimal("0")
-            state["quantity"] = current_quantity - sell_quantity
-            state["cost_basis"] = state["cost_basis"] - (average_cost * sell_quantity)
-            if fee:
-                state["cost_basis"] += fee
-            if state["quantity"] == 0:
-                state["cost_basis"] = Decimal("0")
-
-        snapshots[(item["snapshot_date"], item["asset_code"], item["currency"])] = {
-            "account_id": account_id,
-            "asset_code": item["asset_code"],
-            "quantity": state["quantity"],
-            "average_cost": (state["cost_basis"] / state["quantity"].copy_abs()) if state["quantity"] != 0 else Decimal("0"),
-            "currency": item["currency"],
-            "snapshot_date": _parse_date_value(item["snapshot_date"]),
-        }
-
-    positions: list[dict[str, Any]] = []
-    for position in snapshots.values():
-        quantity = Decimal(str(position["quantity"]))
-        if quantity == 0:
-            continue
-        positions.append(position)
 
     return sorted(positions, key=lambda row: (row["snapshot_date"], row["asset_code"], row["currency"]))
 
