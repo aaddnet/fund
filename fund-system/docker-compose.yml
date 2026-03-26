@@ -11,14 +11,7 @@ services:
     ports:
       - 5432:5432
     volumes:
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
 
-  backend:
-    build: ./backend
-    ports:
-      - 8000:8000
-    depends_on:
-      - db
 
   frontend:
     build: ./frontend

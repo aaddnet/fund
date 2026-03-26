@@ -66,6 +66,13 @@ CREATE TABLE IF NOT EXISTS import_batch (
     id SERIAL PRIMARY KEY,
     source VARCHAR(50) NOT NULL,
     filename VARCHAR(255),
+    account_id INT NOT NULL REFERENCES account(id),
+    status VARCHAR(30) NOT NULL DEFAULT 'uploaded',
+    row_count INT NOT NULL DEFAULT 0,
+    parsed_count INT NOT NULL DEFAULT 0,
+    confirmed_count INT NOT NULL DEFAULT 0,
+    failed_reason TEXT,
+    preview_json TEXT NOT NULL DEFAULT '[]',
     imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -113,6 +120,11 @@ CREATE TABLE IF NOT EXISTS asset_snapshot (
     quantity NUMERIC(24,8) NOT NULL,
     price_usd NUMERIC(24,8) NOT NULL,
     value_usd NUMERIC(24,8) NOT NULL,
+    currency VARCHAR(10),
+    price_native NUMERIC(24,8),
+    value_native NUMERIC(24,8),
+    fx_rate_to_usd NUMERIC(24,8),
+    account_ids TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -137,6 +149,64 @@ CREATE TABLE IF NOT EXISTS fee_record (
     gross_return NUMERIC(12,6) NOT NULL,
     fee_rate NUMERIC(12,6) NOT NULL,
     fee_amount_usd NUMERIC(24,8) NOT NULL,
+    nav_start NUMERIC(24,8),
+    nav_end_before_fee NUMERIC(24,8),
+    annual_return_pct NUMERIC(12,6),
+    excess_return_pct NUMERIC(12,6),
+    fee_base_usd NUMERIC(24,8),
+    nav_after_fee NUMERIC(24,8),
+    applied_date DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id SERIAL PRIMARY KEY,
+    actor_role VARCHAR(50) NOT NULL,
+    actor_id VARCHAR(100) NOT NULL,
+    client_scope_id INT,
+    action VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(100) NOT NULL,
+    entity_id VARCHAR(100),
+    status VARCHAR(30) NOT NULL DEFAULT 'success',
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS scheduler_job_run (
+    id SERIAL PRIMARY KEY,
+    job_name VARCHAR(100) NOT NULL,
+    trigger_source VARCHAR(30) NOT NULL,
+    status VARCHAR(30) NOT NULL,
+    message TEXT,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS auth_user (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL,
+    client_scope_id INT REFERENCES client(id),
+    display_name VARCHAR(255),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    last_login_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS auth_session (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES auth_user(id),
+    session_token_hash VARCHAR(255) NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    last_seen_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -152,3 +222,4 @@ CREATE INDEX IF NOT EXISTS idx_exchange_rate_snapshot_date ON exchange_rate(snap
 CREATE INDEX IF NOT EXISTS idx_asset_price_snapshot_date ON asset_price(snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_nav_record_date ON nav_record(nav_date);
 CREATE INDEX IF NOT EXISTS idx_share_transaction_date ON share_transaction(tx_date);
+CREATE INDEX IF NOT EXISTS idx_share_transaction_fund_client ON share_transaction(fund_id, client_id);

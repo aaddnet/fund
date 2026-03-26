@@ -1,36 +1,27 @@
-# Fund Management System (V1 Scaffold)
+# Fund Management System (legacy scaffold docs)
 
-This directory contains an initial scaffold for a Fund Management System V1:
+新的本地联调入口已提升到仓库根目录：
 
-- **PostgreSQL schema** in `db/schema.sql`
-- **FastAPI backend** in `backend/app`
-- **Next.js frontend** in `frontend`
-- **Project notes/docs** in `docs`
+- `../docker-compose.local.yml`
+- `../start-local.sh`
+- `../smoke-test.sh`
+- `../README.md`
 
-## Quick start
+## 推荐使用方式
 
-### 1) Start database
-
-```bash
-docker compose up -d db
-```
-
-### 2) Run backend
+从仓库根目录执行：
 
 ```bash
-cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+cd ..
+./start-local.sh
 ```
 
-### 3) Run frontend
+或：
 
 ```bash
-cd frontend
-npm install
-npm run dev
+docker compose -f docker-compose.local.yml up --build
 ```
 
-## Scope
+## 保留本目录的原因
 
-This is an initialization scaffold intended to match the requested project tree and V1 direction.
+本目录仍保留早期 scaffold 资料，方便追溯，但后续以根目录的联调脚本和文档为准。

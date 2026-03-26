@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 import requests
 import yfinance as yf
 from sqlalchemy.orm import Session
@@ -29,7 +29,7 @@ def fetch_and_save_prices(db: Session, assets: list[str], snapshot_date):
             out.append(exists)
             continue
         price, source = _fetch_price(asset)
-        row = AssetPrice(asset_code=asset, price_usd=price, source=source, snapshot_date=snapshot_date, updated_at=datetime.now(UTC))
+        row = AssetPrice(asset_code=asset, price_usd=price, source=source, snapshot_date=snapshot_date, updated_at=datetime.now(timezone.utc))
         db.add(row)
         out.append(row)
     db.commit()
