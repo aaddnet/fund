@@ -28,6 +28,10 @@ login() {
 TOKEN="$(login | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
 AUTH_HEADER=( -H "Authorization: Bearer $TOKEN" )
 
+# Admin token used for write operations that require admin role (client/account CRUD)
+ADMIN_TOKEN="$(curl -fsS -X POST "$BASE_URL/auth/login" -F 'username=admin' -F 'password=Admin12345' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+ADMIN_HEADER=( -H "Authorization: Bearer $ADMIN_TOKEN" )
+
 echo "== Health checks =="
 curl -fsS "$BASE_URL/health" && echo
 curl -fsS "$BASE_URL/health/db" && echo
@@ -75,12 +79,13 @@ curl -fsS "${AUTH_HEADER[@]}" "$BASE_URL/import/$IMPORT_BATCH_ID" && echo
 curl -fsS -X POST "${AUTH_HEADER[@]}" "$BASE_URL/import/$IMPORT_BATCH_ID/confirm" && echo
 
 echo "== Client / Account CRUD flow =="
-NEW_CLIENT_ID="$(curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/client" -d '{"name":"Bob", "email":"bob@example.com"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+# Client and account creation requires admin role
+NEW_CLIENT_ID="$(curl -fsS -X POST "${ADMIN_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/client" -d '{"name":"Bob", "email":"bob@example.com"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "Created Client ID: $NEW_CLIENT_ID"
-NEW_ACCOUNT_ID="$(curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account" -d "{\"fund_id\":1, \"client_id\":$NEW_CLIENT_ID, \"broker\":\"TestBroker\", \"account_no\":\"TEST-$RANDOM\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+NEW_ACCOUNT_ID="$(curl -fsS -X POST "${ADMIN_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account" -d "{\"fund_id\":1, \"client_id\":$NEW_CLIENT_ID, \"broker\":\"TestBroker\", \"account_no\":\"TEST-$RANDOM\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "Created Account ID: $NEW_ACCOUNT_ID"
-curl -fsS -X PATCH "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/client/$NEW_CLIENT_ID" -d '{"name":"Bob Updated"}' && echo
-curl -fsS -X PATCH "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account/$NEW_ACCOUNT_ID" -d '{"broker":"TestBroker Updated"}' && echo
+curl -fsS -X PATCH "${ADMIN_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/client/$NEW_CLIENT_ID" -d '{"name":"Bob Updated"}' && echo
+curl -fsS -X PATCH "${ADMIN_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account/$NEW_ACCOUNT_ID" -d '{"broker":"TestBroker Updated"}' && echo
 
 echo "== Business flow =="
 curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/nav/calc" -d '{"fund_id":1,"nav_date":"2026-03-31"}' && echo

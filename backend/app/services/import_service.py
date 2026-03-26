@@ -11,6 +11,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.models import Account, ImportBatch, Position, Transaction
+from app.services.parser import ib_parser, kraken_parser, moomoo_parser, schwab_parser
 
 IMPORT_STATUS_UPLOADED = "uploaded"
 IMPORT_STATUS_PARSED = "parsed"
@@ -52,6 +53,17 @@ COLUMN_ALIASES = {
 BUY_TX_TYPES = {"buy", "b", "subscribe", "sub", "deposit"}
 SELL_TX_TYPES = {"sell", "s", "redeem", "redemption", "withdrawal"}
 
+# Map import source name → platform-specific preprocessor
+_PREPROCESSORS = {
+    "ib": ib_parser.preprocess,
+    "interactive_brokers": ib_parser.preprocess,
+    "kraken": kraken_parser.preprocess,
+    "schwab": schwab_parser.preprocess,
+    "charles_schwab": schwab_parser.preprocess,
+    "moomoo": moomoo_parser.preprocess,
+    "futu": moomoo_parser.preprocess,
+}
+
 
 def list_batches(db: Session) -> list[ImportBatch]:
     return db.query(ImportBatch).order_by(ImportBatch.id.desc()).all()
@@ -77,7 +89,9 @@ def upload_csv(db: Session, source: str, filename: str, account_id: int, content
     db.flush()
 
     try:
-        rows = _parse_csv_rows(content)
+        preprocessor = _PREPROCESSORS.get(source.lower().strip())
+        payload = preprocessor(content) if preprocessor else content
+        rows = _parse_csv_rows(payload)
         batch.row_count = len(rows)
         batch.parsed_count = len(rows)
         batch.preview_json = json.dumps(rows)

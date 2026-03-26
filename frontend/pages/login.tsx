@@ -9,8 +9,8 @@ import { colors, styles } from '../lib/ui';
 export default function LoginPage() {
   const { signIn } = useAuth();
   const { locale, setLocale, t } = useI18n();
-  const [username, setUsername] = useState('ops');
-  const [password, setPassword] = useState('Ops1234567');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 

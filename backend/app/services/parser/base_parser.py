@@ -1,8 +1,10 @@
 import csv
+import io
 from pathlib import Path
 
 
 def parse_csv(path: str):
+    """Legacy file-path based parser for standalone use."""
     rows = []
     with Path(path).open("r", newline="") as f:
         reader = csv.DictReader(f)
@@ -19,3 +21,8 @@ def parse_csv(path: str):
                 }
             )
     return rows
+
+
+def preprocess(raw: bytes) -> bytes:
+    """Identity preprocessor — returns raw bytes unchanged (generic CSV)."""
+    return raw
