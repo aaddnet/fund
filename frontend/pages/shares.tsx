@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
+import Modal from '../components/Modal';
+import { useToast } from '../components/Toast';
 import {
   Client,
   Fund,
@@ -14,6 +16,8 @@ import {
   getShareBalances,
   getShareHistory,
 } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import { requirePageAuth } from '../lib/pageAuth';
 import { colors, formatNumber, styles } from '../lib/ui';
 
@@ -28,16 +32,23 @@ type Props = {
 type FormMode = 'subscribe' | 'redeem';
 
 export default function Page({ shares, balances, funds, clients, error }: Props) {
+  const { hasPermission } = useAuth();
+  const { t } = useI18n();
+  const { showToast } = useToast();
+  const canWriteShares = hasPermission('shares.write');
+  
   const defaultFundId = String(funds[0]?.id ?? 1);
   const defaultClientId = String(clients[0]?.id ?? 1);
+  
   const [rows, setRows] = useState(shares);
   const [balanceRows, setBalanceRows] = useState(balances);
+  
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [mode, setMode] = useState<FormMode>('subscribe');
   const [fundId, setFundId] = useState(defaultFundId);
   const [clientId, setClientId] = useState(defaultClientId);
   const [txDate, setTxDate] = useState('2026-06-30');
   const [amountUsd, setAmountUsd] = useState('500');
-  const [submitState, setSubmitState] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const selectedBalance = useMemo(
@@ -45,10 +56,22 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
     [balanceRows, clientId, fundId],
   );
 
+  function openModal(newMode: FormMode) {
+    setMode(newMode);
+    setIsModalOpen(true);
+  }
+
+  function closeModal() {
+    setIsModalOpen(false);
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteShares) {
+      showToast(t('permissionDenied'), 'error');
+      return;
+    }
     setSubmitting(true);
-    setSubmitState('');
     try {
       const payload = {
         fund_id: Number(fundId),
@@ -78,102 +101,106 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
           )
           .sort((a, b) => (a.fund_id === b.fund_id ? a.client_id - b.client_id : a.fund_id - b.fund_id));
       });
-      setSubmitState(`${mode === 'subscribe' ? 'Subscription' : 'Redemption'} booked successfully for client ${created.client_id}.`);
+      showToast(mode === 'subscribe' ? t('subscriptionBooked', { clientId: created.client_id }) : t('redemptionBooked', { clientId: created.client_id }), 'success');
+      closeModal();
     } catch (submitError) {
-      setSubmitState(submitError instanceof Error ? submitError.message : `Failed to ${mode} shares.`);
+      showToast(submitError instanceof Error ? submitError.message : t('sharesFailed', { mode: mode === 'subscribe' ? t('subscribe') : t('redeem') }), 'error');
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <Layout title='Share Transactions' subtitle='Record subscriptions/redemptions against locked NAV dates and review current balances.'>
-      {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>Backend warning: {error}</div> : null}
+    <Layout title={t('sharesTitle')} subtitle={t('sharesSubtitle')} requiredPermission='shares.read'>
+      {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>{t('backendWarning')}: {error}</div> : null}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, gap: 10 }}>
+        {canWriteShares && (
+          <>
+            <button style={{...styles.buttonPrimary, backgroundColor: colors.success}} onClick={() => openModal('subscribe')}>+ Subscribe</button>
+            <button style={{...styles.buttonPrimary, backgroundColor: colors.danger}} onClick={() => openModal('redeem')}>- Redeem</button>
+          </>
+        )}
+      </div>
       <div style={styles.grid2}>
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Create Share Transaction</h3>
-          <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 14 }}>
-            <FormField label='Transaction Type'>
-              <select style={styles.input} value={mode} onChange={(event) => setMode(event.target.value as FormMode)}>
-                <option value='subscribe'>Subscribe</option>
-                <option value='redeem'>Redeem</option>
-              </select>
-            </FormField>
-            <FormField label='Fund'>
-              <select style={styles.input} value={fundId} onChange={(event) => setFundId(event.target.value)}>
-                {funds.map((fund) => (
-                  <option key={fund.id} value={fund.id}>
-                    #{fund.id} · {fund.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label='Client'>
-              <select style={styles.input} value={clientId} onChange={(event) => setClientId(event.target.value)}>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    #{client.id} · {client.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label='Transaction Date'>
-              <input style={styles.input} type='date' value={txDate} onChange={(event) => setTxDate(event.target.value)} />
-            </FormField>
-            <FormField label='Amount USD'>
-              <input style={styles.input} type='number' min='0' step='0.01' value={amountUsd} onChange={(event) => setAmountUsd(event.target.value)} />
-            </FormField>
-            <div style={{ fontSize: 13, color: colors.muted }}>
-              Current client balance: <strong>{formatNumber(selectedBalance?.share_balance ?? 0, 8)}</strong> shares
-            </div>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <button style={styles.buttonPrimary} disabled={submitting} type='submit'>
-                {submitting ? 'Submitting...' : mode === 'subscribe' ? 'Create Subscription' : 'Create Redemption'}
-              </button>
-              {submitState ? <span style={{ color: submitState.includes('successfully') ? colors.success : colors.danger }}>{submitState}</span> : null}
-            </div>
-          </form>
-        </div>
-        <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Rules</h3>
+          <h3 style={{ marginTop: 0 }}>{t('rules')}</h3>
           <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
-            <li>Transactions are allowed only in quarter-end months.</li>
-            <li>The transaction date must match an existing locked NAV date.</li>
-            <li>The backend calculates shares from amount ÷ NAV at date.</li>
-            <li>Redeem validates against the client&apos;s current share balance to prevent over-redemption.</li>
+            <li>{t('sharesRule1')}</li>
+            <li>{t('sharesRule2')}</li>
+            <li>{t('sharesRule3')}</li>
+            <li>{t('sharesRule4')}</li>
           </ul>
         </div>
+        <div style={styles.card}>
+          <h3 style={{ marginTop: 0 }}>{t('currentShareBalances')}</h3>
+          <ProductTable
+            emptyText={t('noAccountsFound')}
+            rows={balanceRows}
+            columns={[
+              { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
+              { key: 'client', title: t('client'), render: (item) => item.client_id },
+              { key: 'balance', title: t('sharesLabel'), render: (item) => formatNumber(item.share_balance, 8) },
+            ]}
+          />
+        </div>
       </div>
 
       <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Current Share Balances</h3>
+        <h3 style={{ marginTop: 0 }}>{t('shareLedger')}</h3>
         <ProductTable
-          emptyText='No balances found.'
-          rows={balanceRows}
-          columns={[
-            { key: 'fund', title: 'Fund', render: (item) => item.fund_id },
-            { key: 'client', title: 'Client', render: (item) => item.client_id },
-            { key: 'balance', title: 'Share Balance', render: (item) => formatNumber(item.share_balance, 8) },
-          ]}
-        />
-      </div>
-
-      <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Share Ledger</h3>
-        <ProductTable
-          emptyText='No share transactions found.'
+          emptyText={t('noShareTransactions')}
           rows={rows}
           columns={[
-            { key: 'date', title: 'Date', render: (item) => item.tx_date },
-            { key: 'type', title: 'Type', render: (item) => item.tx_type },
-            { key: 'fund', title: 'Fund', render: (item) => item.fund_id },
-            { key: 'client', title: 'Client', render: (item) => item.client_id },
-            { key: 'amount', title: 'Amount USD', render: (item) => formatNumber(item.amount_usd) },
-            { key: 'shares', title: 'Shares', render: (item) => formatNumber(item.shares, 8) },
+            { key: 'date', title: t('date'), render: (item) => item.tx_date },
+            { key: 'type', title: t('type'), render: (item) => item.tx_type },
+            { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
+            { key: 'client', title: t('client'), render: (item) => item.client_id },
+            { key: 'amount', title: t('amountUsd'), render: (item) => formatNumber(item.amount_usd) },
+            { key: 'shares', title: t('sharesLabel'), render: (item) => formatNumber(item.shares, 8) },
             { key: 'nav', title: 'NAV at Date', render: (item) => formatNumber(item.nav_at_date) },
           ]}
         />
       </div>
+
+      <Modal isOpen={isModalOpen} onClose={closeModal} title={mode === 'subscribe' ? t('createSubscription') : t('createRedemption')}>
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 14 }}>
+          <FormField label={t('fund')}>
+            <select style={styles.input} value={fundId} onChange={(event) => setFundId(event.target.value)} disabled={submitting}>
+              {funds.map((fund) => (
+                <option key={fund.id} value={fund.id}>
+                  #{fund.id} · {fund.name}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label={t('client')}>
+            <select style={styles.input} value={clientId} onChange={(event) => setClientId(event.target.value)} disabled={submitting}>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  #{client.id} · {client.name}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label={t('transactionDate')}>
+            <input style={styles.input} type='date' value={txDate} onChange={(event) => setTxDate(event.target.value)} disabled={submitting} />
+          </FormField>
+          <FormField label={t('amountUsd')}>
+            <input style={styles.input} type='number' min='0' step='0.01' value={amountUsd} onChange={(event) => setAmountUsd(event.target.value)} disabled={submitting} />
+          </FormField>
+          <div style={{ fontSize: 13, color: colors.muted, marginTop: 4 }}>
+            {t('currentClientBalance')}: <strong>{formatNumber(selectedBalance?.share_balance ?? 0, 8)}</strong> {t('sharesLabel')}
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button type="button" onClick={closeModal} style={styles.buttonSecondary} disabled={submitting}>Cancel</button>
+            <button style={styles.buttonPrimary} disabled={submitting} type='submit'>
+              {submitting ? t('submitting') : mode === 'subscribe' ? t('createSubscription') : t('createRedemption')}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
     </Layout>
   );
 }

@@ -179,6 +179,46 @@ export type CustomerView = {
   nav_history: NavRecord[];
 };
 
+export type ReportBreakdownRow = {
+  key: string | number;
+  share_tx_count: number;
+  subscription_amount_usd: number;
+  redemption_amount_usd: number;
+  net_share_flow_usd: number;
+  shares_delta: number;
+  latest_tx_date?: string | null;
+};
+
+export type ReportTransactionAssetRow = {
+  asset_code: string;
+  transaction_count: number;
+  gross_notional_estimate: number;
+  latest_trade_date?: string | null;
+};
+
+export type ReportNavByFundRow = {
+  fund_id: number;
+  latest_nav_date?: string | null;
+  latest_nav_per_share: number;
+  latest_total_assets_usd: number;
+  record_count: number;
+};
+
+export type ReportShareFlowSeriesRow = {
+  date: string;
+  subscription_amount_usd: number;
+  redemption_amount_usd: number;
+  net_share_flow_usd: number;
+  share_tx_count: number;
+};
+
+export type ReportNavSeriesRow = {
+  date: string;
+  fund_id: number;
+  nav_per_share: number;
+  total_assets_usd: number;
+};
+
 export type ReportOverview = {
   filters: {
     period_type: 'month' | 'quarter' | 'year' | string;
@@ -187,6 +227,7 @@ export type ReportOverview = {
     date_to: string;
     fund_id?: number | null;
     client_id?: number | null;
+    tx_type?: string | null;
   };
   summary: {
     share_tx_count: number;
@@ -196,11 +237,26 @@ export type ReportOverview = {
     nav_record_count: number;
     fee_record_count: number;
     transaction_count: number;
+    fund_count: number;
+    client_count: number;
+    avg_nav_per_share: number;
+    latest_nav_date?: string | null;
   };
   share_history: ShareTransaction[];
   nav_records: NavRecord[];
   fee_records: FeeRecord[];
   transactions: Transaction[];
+  breakdowns: {
+    by_fund: ReportBreakdownRow[];
+    by_client: ReportBreakdownRow[];
+    by_tx_type: ReportBreakdownRow[];
+    transactions_by_asset: ReportTransactionAssetRow[];
+    nav_by_fund: ReportNavByFundRow[];
+  };
+  series: {
+    share_flow_by_date: ReportShareFlowSeriesRow[];
+    nav_trend: ReportNavSeriesRow[];
+  };
 };
 
 type FetchOptions = RequestInit & {
@@ -363,7 +419,7 @@ export function persistLocaleCookie(locale: Locale) {
 }
 
 export async function getHealth(accessToken?: string | null) {
-  return fetchJson<{ status: string }>('/health', { accessToken });
+  return fetchJson<{ status: string; uptime_seconds?: number }>('/health', { accessToken });
 }
 
 export async function getHealthDb(accessToken?: string | null) {
@@ -426,8 +482,8 @@ export async function getCustomerView(clientId: number, accessToken?: string | n
   return fetchJson<CustomerView>(`/customer/${clientId}`, { accessToken });
 }
 
-export async function getReportOverview(params: { periodType: string; periodValue: string; fundId?: number; clientId?: number; accessToken?: string | null }) {
-  return fetchJson<ReportOverview>(`/reports/overview${buildQuery({ period_type: params.periodType, period_value: params.periodValue, fund_id: params.fundId, client_id: params.clientId })}`, { accessToken: params.accessToken });
+export async function getReportOverview(params: { periodType: string; periodValue: string; fundId?: number; clientId?: number; txType?: string; accessToken?: string | null }) {
+  return fetchJson<ReportOverview>(`/reports/overview${buildQuery({ period_type: params.periodType, period_value: params.periodValue, fund_id: params.fundId, client_id: params.clientId, tx_type: params.txType })}`, { accessToken: params.accessToken });
 }
 
 export async function uploadImportBatch(payload: { source: string; accountId: number; file: File }) {
@@ -464,6 +520,34 @@ export async function createShareSubscription(payload: { fund_id: number; client
 export async function createShareRedemption(payload: { fund_id: number; client_id: number; tx_date: string; amount_usd: number }) {
   return fetchJson<ShareTransaction>('/share/redeem', {
     method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createClient(payload: { name: string; email?: string | null }) {
+  return fetchJson<Client>('/client', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateClient(clientId: number, payload: { name?: string | null; email?: string | null }) {
+  return fetchJson<Client>(`/client/${clientId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createAccount(payload: { fund_id: number; client_id: number; broker: string; account_no: string }) {
+  return fetchJson<Account>('/account', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateAccount(accountId: number, payload: { fund_id?: number | null; client_id?: number | null; broker?: string | null; account_no?: string | null }) {
+  return fetchJson<Account>(`/account/${accountId}`, {
+    method: 'PATCH',
     body: JSON.stringify(payload),
   });
 }

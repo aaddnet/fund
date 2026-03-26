@@ -17,6 +17,40 @@ IMPORT_STATUS_PARSED = "parsed"
 IMPORT_STATUS_CONFIRMED = "confirmed"
 IMPORT_STATUS_FAILED = "failed"
 REQUIRED_COLUMNS = {"trade_date", "asset_code", "quantity", "price", "currency", "tx_type"}
+COLUMN_ALIASES = {
+    "date": "trade_date",
+    "tradedate": "trade_date",
+    "trade_date": "trade_date",
+    "transaction_date": "trade_date",
+    "symbol": "asset_code",
+    "ticker": "asset_code",
+    "security": "asset_code",
+    "asset": "asset_code",
+    "asset_code": "asset_code",
+    "qty": "quantity",
+    "shares": "quantity",
+    "amount": "quantity",
+    "quantity": "quantity",
+    "execution_price": "price",
+    "unit_price": "price",
+    "trade_price": "price",
+    "price": "price",
+    "ccy": "currency",
+    "fx_currency": "currency",
+    "currency": "currency",
+    "side": "tx_type",
+    "action": "tx_type",
+    "type": "tx_type",
+    "tx_type": "tx_type",
+    "commission": "fee",
+    "fees": "fee",
+    "fee": "fee",
+    "as_of": "snapshot_date",
+    "position_date": "snapshot_date",
+    "snapshot_date": "snapshot_date",
+}
+BUY_TX_TYPES = {"buy", "b", "subscribe", "sub", "deposit"}
+SELL_TX_TYPES = {"sell", "s", "redeem", "redemption", "withdrawal"}
 
 
 def list_batches(db: Session) -> list[ImportBatch]:
@@ -161,10 +195,11 @@ def _parse_csv_rows(content: bytes) -> list[dict[str, Any]]:
         except ValueError as exc:
             raise ValueError(f"Row {index}: {exc}") from exc
 
+        tx_type = _normalize_tx_type(normalized["tx_type"])
+        quantity = _normalize_quantity_for_tx_type(quantity, tx_type)
         if quantity == 0:
             raise ValueError(f"Row {index}: quantity cannot be zero.")
 
-        tx_type = (normalized["tx_type"] or "trade").lower()
         snapshot_date = normalized.get("snapshot_date") or trade_date.isoformat()
         parsed_rows.append(
             {
@@ -173,7 +208,7 @@ def _parse_csv_rows(content: bytes) -> list[dict[str, Any]]:
                 "asset_code": normalized["asset_code"].upper(),
                 "quantity": str(quantity),
                 "price": str(price),
-                "currency": (normalized["currency"] or "USD").upper(),
+                "currency": (normalized.get("currency") or "USD").upper(),
                 "tx_type": tx_type,
                 "fee": str(fee),
                 "snapshot_date": _parse_date_value(snapshot_date).isoformat(),
@@ -187,57 +222,99 @@ def _parse_csv_rows(content: bytes) -> list[dict[str, Any]]:
 
 
 def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str], dict[str, Decimal | str | date]] = defaultdict(
-        lambda: {
-            "quantity": Decimal("0"),
-            "cost_basis": Decimal("0"),
-        }
-    )
+    position_state: dict[tuple[str, str], dict[str, Decimal]] = defaultdict(lambda: {"quantity": Decimal("0"), "cost_basis": Decimal("0")})
+    snapshots: dict[tuple[str, str, str], dict[str, Decimal | str | date]] = {}
 
-    for item in sorted(preview_rows, key=lambda row: (row["snapshot_date"], row["asset_code"], row["trade_date"], row["row_number"])):
-        key = (item["snapshot_date"], item["asset_code"], item["currency"])
-        bucket = grouped[key]
+    for item in sorted(preview_rows, key=lambda row: (row["snapshot_date"], row["trade_date"], row["row_number"], row["asset_code"])):
+        position_key = (item["asset_code"], item["currency"])
+        state = position_state[position_key]
         quantity = Decimal(str(item["quantity"]))
         price = Decimal(str(item["price"]))
         fee = Decimal(str(item.get("fee", "0")))
-        bucket["quantity"] += quantity
-        bucket["cost_basis"] += (quantity * price) + fee
+
+        if quantity > 0:
+            state["quantity"] += quantity
+            state["cost_basis"] += (quantity * price) + fee
+        else:
+            sell_quantity = quantity.copy_abs()
+            current_quantity = state["quantity"]
+            if current_quantity <= 0 or sell_quantity > current_quantity:
+                raise ValueError(f"Row {item['row_number']}: sell quantity exceeds current position for {item['asset_code']}")
+            average_cost = (state["cost_basis"] / current_quantity) if current_quantity != 0 else Decimal("0")
+            state["quantity"] = current_quantity - sell_quantity
+            state["cost_basis"] = state["cost_basis"] - (average_cost * sell_quantity)
+            if fee:
+                state["cost_basis"] += fee
+            if state["quantity"] == 0:
+                state["cost_basis"] = Decimal("0")
+
+        snapshots[(item["snapshot_date"], item["asset_code"], item["currency"])] = {
+            "account_id": account_id,
+            "asset_code": item["asset_code"],
+            "quantity": state["quantity"],
+            "average_cost": (state["cost_basis"] / state["quantity"].copy_abs()) if state["quantity"] != 0 else Decimal("0"),
+            "currency": item["currency"],
+            "snapshot_date": _parse_date_value(item["snapshot_date"]),
+        }
 
     positions: list[dict[str, Any]] = []
-    for (snapshot_date, asset_code, currency), bucket in grouped.items():
-        quantity = Decimal(str(bucket["quantity"]))
+    for position in snapshots.values():
+        quantity = Decimal(str(position["quantity"]))
         if quantity == 0:
             continue
-        cost_basis = Decimal(str(bucket["cost_basis"]))
-        average_cost = (cost_basis / quantity.copy_abs()) if quantity != 0 else Decimal("0")
-        positions.append(
-            {
-                "account_id": account_id,
-                "asset_code": asset_code,
-                "quantity": quantity,
-                "average_cost": average_cost,
-                "currency": currency,
-                "snapshot_date": _parse_date_value(snapshot_date),
-            }
-        )
+        positions.append(position)
 
-    return positions
+    return sorted(positions, key=lambda row: (row["snapshot_date"], row["asset_code"], row["currency"]))
 
 
 def _normalize_column_name(value: str) -> str:
-    return value.strip().lower().replace(" ", "_")
+    normalized = value.strip().lower().replace(" ", "_")
+    normalized = normalized.replace("-", "_")
+    return COLUMN_ALIASES.get(normalized, normalized)
+
+
+def _normalize_tx_type(value: str) -> str:
+    normalized = value.strip().lower().replace(" ", "_")
+    if normalized in BUY_TX_TYPES:
+        return "buy"
+    if normalized in SELL_TX_TYPES:
+        return "sell"
+    return normalized or "trade"
+
+
+def _normalize_quantity_for_tx_type(quantity: Decimal, tx_type: str) -> Decimal:
+    if tx_type == "sell" and quantity > 0:
+        return quantity * Decimal("-1")
+    if tx_type == "buy" and quantity < 0:
+        return quantity.copy_abs()
+    return quantity
 
 
 def _parse_decimal(value: str, field_name: str) -> Decimal:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"invalid {field_name}: {value}")
+    negative = normalized.startswith("(") and normalized.endswith(")")
+    normalized = normalized.strip("()")
+    normalized = normalized.replace(",", "").replace("$", "")
     try:
-        return Decimal(value)
+        parsed = Decimal(normalized)
     except (InvalidOperation, TypeError) as exc:
         raise ValueError(f"invalid {field_name}: {value}") from exc
+    return parsed * Decimal("-1") if negative else parsed
 
 
 def _parse_date_value(value: str) -> date:
-    try:
-        return date.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(f"invalid date: {value}") from exc
+    normalized = str(value or "").strip()
+    for formatter in (date.fromisoformat,):
+        try:
+            return formatter(normalized)
+        except ValueError:
+            pass
 
+    for pattern in ("%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(normalized, pattern).date()
+        except ValueError:
+            continue
+    raise ValueError(f"invalid date: {value}")

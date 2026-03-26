@@ -2,6 +2,7 @@ import Link from 'next/link';
 import Layout from '../../components/Layout';
 import ProductTable from '../../components/ProductTable';
 import { Client, CustomerView, getClients, getCustomerView } from '../../lib/api';
+import { useI18n } from '../../lib/i18n';
 import { requirePageAuth } from '../../lib/pageAuth';
 import { colors, formatNumber, styles } from '../../lib/ui';
 
@@ -13,13 +14,15 @@ type Props = {
 };
 
 export default function Page({ customer, clients, selectedClientId, error }: Props) {
+  const { t } = useI18n();
+
   return (
-    <Layout title='Customer View' subtitle='Minimal read-only customer portal view: balances, share history, and relevant NAV history.'>
-      {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>Backend warning: {error}</div> : null}
+    <Layout title={t('customerTitle')} subtitle={t('customerSubtitle')} requiredPermission='customer.read'>
+      {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>{t('backendWarning')}: {error}</div> : null}
 
       <div style={styles.grid2}>
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Switch Customer</h3>
+          <h3 style={{ marginTop: 0 }}>{t('switchCustomer')}</h3>
           <div style={{ display: 'grid', gap: 8 }}>
             {clients.map((client) => (
               <Link key={client.id} href={`/customers/${client.id}`} style={{ color: client.id === selectedClientId ? colors.primary : colors.text, fontWeight: client.id === selectedClientId ? 700 : 500 }}>
@@ -30,61 +33,61 @@ export default function Page({ customer, clients, selectedClientId, error }: Pro
         </div>
 
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Customer Summary</h3>
+          <h3 style={{ marginTop: 0 }}>{t('customerSummaryTitle')}</h3>
           {!customer ? (
-            <p style={{ color: colors.muted, marginBottom: 0 }}>No customer selected.</p>
+            <p style={{ color: colors.muted, marginBottom: 0 }}>{t('noCustomerSelected')}</p>
           ) : (
             <div style={{ display: 'grid', gap: 8 }}>
-              <div><strong>Name:</strong> {customer.client.name}</div>
-              <div><strong>Email:</strong> {customer.client.email || '—'}</div>
-              <div><strong>Accounts:</strong> {customer.accounts.length}</div>
-              <div><strong>Funds:</strong> {customer.client.fund_count ?? customer.share_balances.length}</div>
-              <div><strong>Share Transactions:</strong> {customer.share_history.length}</div>
+              <div><strong>{t('customerName')}:</strong> {customer.client.name}</div>
+              <div><strong>{t('email')}:</strong> {customer.client.email || t('notAvailable')}</div>
+              <div><strong>{t('accountsCount')}:</strong> {customer.accounts.length}</div>
+              <div><strong>{t('fundsLabel')}:</strong> {customer.client.fund_count ?? customer.share_balances.length}</div>
+              <div><strong>{t('shareTransactionsLabel')}:</strong> {customer.share_history.length}</div>
             </div>
           )}
         </div>
       </div>
 
       <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Current Share Balances</h3>
+        <h3 style={{ marginTop: 0 }}>{t('currentShareBalances')}</h3>
         <ProductTable
-          emptyText='No balances found.'
+          emptyText={t('noAccountsFound')}
           rows={customer?.share_balances ?? []}
           columns={[
-            { key: 'fund', title: 'Fund', render: (item) => item.fund_id },
-            { key: 'client', title: 'Client', render: (item) => item.client_id },
-            { key: 'balance', title: 'Share Balance', render: (item) => formatNumber(item.share_balance, 8) },
+            { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
+            { key: 'client', title: t('client'), render: (item) => item.client_id },
+            { key: 'balance', title: t('sharesLabel'), render: (item) => formatNumber(item.share_balance, 8) },
           ]}
         />
       </div>
 
       <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Share Transaction History</h3>
+        <h3 style={{ marginTop: 0 }}>{t('shareTransactionHistory')}</h3>
         <ProductTable
-          emptyText='No share transactions found.'
+          emptyText={t('noShareTransactions')}
           rows={customer?.share_history ?? []}
           columns={[
-            { key: 'date', title: 'Date', render: (item) => item.tx_date },
-            { key: 'fund', title: 'Fund', render: (item) => item.fund_id },
-            { key: 'type', title: 'Type', render: (item) => item.tx_type },
-            { key: 'amount', title: 'Amount USD', render: (item) => formatNumber(item.amount_usd) },
-            { key: 'shares', title: 'Shares', render: (item) => formatNumber(item.shares, 8) },
+            { key: 'date', title: t('date'), render: (item) => item.tx_date },
+            { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
+            { key: 'type', title: t('type'), render: (item) => item.tx_type },
+            { key: 'amount', title: t('amountUsd'), render: (item) => formatNumber(item.amount_usd) },
+            { key: 'shares', title: t('sharesLabel'), render: (item) => formatNumber(item.shares, 8) },
             { key: 'nav', title: 'NAV at Date', render: (item) => formatNumber(item.nav_at_date) },
           ]}
         />
       </div>
 
       <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Relevant NAV History</h3>
+        <h3 style={{ marginTop: 0 }}>{t('relevantNavHistory')}</h3>
         <ProductTable
-          emptyText='No NAV history found for this customer.'
+          emptyText={t('noNavForQuery')}
           rows={customer?.nav_history ?? []}
           columns={[
-            { key: 'date', title: 'NAV Date', render: (item) => item.nav_date },
-            { key: 'fund', title: 'Fund', render: (item) => item.fund_id },
+            { key: 'date', title: t('navDate'), render: (item) => item.nav_date },
+            { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
             { key: 'nav', title: 'NAV / Share', render: (item) => formatNumber(item.nav_per_share) },
             { key: 'assets', title: 'Assets USD', render: (item) => formatNumber(item.total_assets_usd) },
-            { key: 'locked', title: 'Locked', render: (item) => (item.is_locked ? 'Yes' : 'No') },
+            { key: 'locked', title: t('locked'), render: (item) => (item.is_locked ? t('yes') : t('no')) },
           ]}
         />
       </div>
@@ -110,7 +113,7 @@ export async function getServerSideProps(context: any) {
     return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, customer, clients, selectedClientId: resolvedClientId } };
   } catch (error) {
     return {
-      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, 
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale,
         customer: null,
         clients: [],
         selectedClientId,

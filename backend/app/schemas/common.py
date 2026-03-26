@@ -32,5 +32,50 @@ class FeeCalcRequest(BaseModel):
     fee_date: date
 
 
-class ImportConfirmRequest(BaseModel):
-    batch_id: Optional[int] = None
+class ClientCreateRequest(BaseModel):
+    name: str
+    email: Optional[str] = None
+
+
+class ClientUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class AccountCreateRequest(BaseModel):
+    fund_id: int
+    client_id: int
+    broker: str
+    account_no: str
+
+
+class AccountUpdateRequest(BaseModel):
+    fund_id: Optional[int] = None
+    client_id: Optional[int] = None
+    broker: Optional[str] = None
+    account_no: Optional[str] = None
+
+
+class AuthUserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+    client_scope_id: Optional[int] = None
+    display_name: Optional[str] = None
+    is_active: bool = True
+
+
+class AuthPasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AuthPasswordResetRequest(BaseModel):
+    new_password: str
+
+
+class AuthUserUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    role: Optional[str] = None
+    client_scope_id: Optional[int] = None
+    is_active: Optional[bool] = None

@@ -3,11 +3,13 @@ import type { GetServerSidePropsContext } from 'next';
 import { useRouter } from 'next/router';
 import { getServerLocale } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+import { useI18n } from '../../lib/i18n';
 import { styles } from '../../lib/ui';
 
 export default function AuthCompletePage() {
   const router = useRouter();
   const { refresh } = useAuth();
+  const { t } = useI18n();
 
   useEffect(() => {
     let active = true;
@@ -31,7 +33,7 @@ export default function AuthCompletePage() {
 
   return (
     <div style={{ ...styles.page, display: 'grid', placeItems: 'center' }}>
-      <div style={styles.card}>Finalizing sign-in...</div>
+      <div style={styles.card}>{t('finalizingSignIn')}</div>
     </div>
   );
 }

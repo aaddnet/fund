@@ -4,20 +4,37 @@ import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { colors, styles } from '../lib/ui';
 
-export default function Layout({ title, children, subtitle }: { title: string; subtitle?: string; children: ReactNode }) {
-  const { user, signOut } = useAuth();
+type LayoutProps = {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+  requiredPermission?: string;
+};
+
+type NavItem = {
+  href: string;
+  label: string;
+  requiredPermission?: string;
+};
+
+export default function Layout({ title, children, subtitle, requiredPermission }: LayoutProps) {
+  const { user, signOut, hasPermission } = useAuth();
   const { locale, setLocale, t } = useI18n();
-  const navItems = [
+  const navItems: NavItem[] = [
     { href: '/', label: t('overview') },
-    { href: '/dashboard', label: t('dashboard') },
-    { href: '/nav', label: t('nav') },
-    { href: '/shares', label: t('shares') },
-    { href: '/accounts', label: t('accounts') },
-    { href: '/clients', label: t('clients') },
-    { href: '/reports', label: t('reports') },
-    { href: '/customers/1', label: t('customerView') },
-    { href: '/import', label: t('import') },
+    { href: '/dashboard', label: t('dashboard'), requiredPermission: 'dashboard.read' },
+    { href: '/nav', label: t('nav'), requiredPermission: 'nav.read' },
+    { href: '/shares', label: t('shares'), requiredPermission: 'shares.read' },
+    { href: '/accounts', label: t('accounts'), requiredPermission: 'accounts.read' },
+    { href: '/clients', label: t('clients'), requiredPermission: 'clients.read' },
+    { href: '/reports', label: t('reports'), requiredPermission: 'reports.read' },
+    { href: `/customers/${user?.client_scope_id || 1}`,
+      label: t('customerView'),
+      requiredPermission: 'customer.read' },
+    { href: '/import', label: t('import'), requiredPermission: 'import.read' },
   ];
+  const visibleNavItems = navItems.filter((item) => !item.requiredPermission || hasPermission(item.requiredPermission));
+  const showPermissionBanner = requiredPermission && !hasPermission(requiredPermission);
 
   return (
     <div style={styles.page}>
@@ -38,7 +55,7 @@ export default function Layout({ title, children, subtitle }: { title: string; s
               {user ? <button style={styles.buttonSecondary} onClick={() => signOut()}>{t('logout')}</button> : null}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {navItems.map((item) => (
+              {visibleNavItems.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}
@@ -59,6 +76,11 @@ export default function Layout({ title, children, subtitle }: { title: string; s
             </div>
           </div>
         </header>
+        {showPermissionBanner ? (
+          <div style={{ ...styles.card, marginBottom: 16, color: colors.warning }}>
+            {t('permissionRequiredPage')}
+          </div>
+        ) : null}
         {children}
       </div>
     </div>

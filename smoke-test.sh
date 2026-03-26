@@ -4,7 +4,7 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
 WEB_URL="${WEB_URL:-http://127.0.0.1:3000}"
 AUTH_USER="${AUTH_USER:-ops}"
-AUTH_PASSWORD="${AUTH_PASSWORD:-ops123}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-Ops1234567}"
 DB_CONTAINER="${DB_CONTAINER:-invest_local_db}"
 
 TMP_CSV="$(mktemp /tmp/invest-import-XXXXXX.csv)"
@@ -71,6 +71,14 @@ IMPORT_BATCH_ID="$(curl -fsS -X POST "$BASE_URL/import/upload" "${AUTH_HEADER[@]
 curl -fsS "${AUTH_HEADER[@]}" "$BASE_URL/import/$IMPORT_BATCH_ID" && echo
 curl -fsS -X POST "${AUTH_HEADER[@]}" "$BASE_URL/import/$IMPORT_BATCH_ID/confirm" && echo
 
+echo "== Client / Account CRUD flow =="
+NEW_CLIENT_ID="$(curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/client" -d '{"name":"Bob", "email":"bob@example.com"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+echo "Created Client ID: $NEW_CLIENT_ID"
+NEW_ACCOUNT_ID="$(curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account" -d "{\"fund_id\":1, \"client_id\":$NEW_CLIENT_ID, \"broker\":\"TestBroker\", \"account_no\":\"TEST-123\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+echo "Created Account ID: $NEW_ACCOUNT_ID"
+curl -fsS -X PATCH "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/client/$NEW_CLIENT_ID" -d '{"name":"Bob Updated"}' && echo
+curl -fsS -X PATCH "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account/$NEW_ACCOUNT_ID" -d '{"broker":"TestBroker Updated"}' && echo
+
 echo "== Business flow =="
 curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/nav/calc" -d '{"fund_id":1,"nav_date":"2026-03-31"}' && echo
 curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/nav/calc" -d '{"fund_id":1,"nav_date":"2026-06-30"}' && echo
@@ -84,7 +92,7 @@ curl -fsS "${AUTH_HEADER[@]}" "$BASE_URL/scheduler/jobs?limit=10" && echo
 curl -fsS "${AUTH_HEADER[@]}" "$BASE_URL/audit?limit=20" && echo
 
 echo "== Client readonly boundary =="
-CLIENT_TOKEN="$(curl -fsS -X POST "$BASE_URL/auth/login" -F 'username=client1' -F 'password=client123' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+CLIENT_TOKEN="$(curl -fsS -X POST "$BASE_URL/auth/login" -F 'username=client1' -F 'password=Client12345' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
 curl -fsS -H "Authorization: Bearer $CLIENT_TOKEN" "$BASE_URL/customer/1" && echo
 STATUS_CODE="$(curl -sS -o /tmp/invest-customer-2-denied.txt -w '%{http_code}' -H "Authorization: Bearer $CLIENT_TOKEN" "$BASE_URL/customer/2")"
 if [[ "$STATUS_CODE" != "403" ]]; then
