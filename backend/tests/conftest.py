@@ -1,9 +1,18 @@
 import os
 import sys
+import types
 from datetime import date
 from pathlib import Path
 
 import pytest
+
+# Provide a minimal multitasking stub so yfinance can be imported in test environments
+# where the multitasking wheel fails to build (missing legacy distutils support).
+if "multitasking" not in sys.modules:
+    _mt = types.ModuleType("multitasking")
+    _mt.task = lambda f: f  # type: ignore[attr-defined]
+    _mt.is_main_thread = lambda: True  # type: ignore[attr-defined]
+    sys.modules["multitasking"] = _mt
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from alembic import command

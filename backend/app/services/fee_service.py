@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, getcontext
 
 from sqlalchemy.orm import Session
+
+# Use 28-digit precision for all fee calculations to avoid rounding drift when
+# exponentiating annualised returns (Python default is also 28, this makes it explicit).
+getcontext().prec = 28
 
 from app.models import FeeRecord, NAVRecord
 

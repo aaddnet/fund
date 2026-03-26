@@ -106,7 +106,7 @@ function downloadReport(report: ReportOverview, type: 'json' | 'csv') {
 }
 
 export default function Page({ report, funds, clients, filters, error }: Props) {
-  const { t } = useI18n();
+
 
   return (
     <Layout title={t('reportsTitle')} subtitle={t('reportsSubtitle')} requiredPermission='reports.read'>
@@ -155,10 +155,6 @@ export default function Page({ report, funds, clients, filters, error }: Props) 
               </select>
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button type='submit' style={styles.buttonPrimary}>{t('runReport')}</button>
-              <Link href='/reports' style={{ ...styles.buttonSecondary, textDecoration: 'none' }}>{t('reset')}</Link>
-              {report ? <button type='button' style={styles.buttonSecondary} onClick={() => downloadReport(report, 'json')}>Export JSON</button> : null}
-              {report ? <button type='button' style={styles.buttonSecondary} onClick={() => downloadReport(report, 'csv')}>Export CSV</button> : null}
             </div>
           </form>
         </div>

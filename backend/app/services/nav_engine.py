@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from decimal import Decimal
+from decimal import Decimal, getcontext
 from typing import Any, Optional
+
+# Explicit precision context for NAV calculations involving large position quantities.
+getcontext().prec = 28
 
 from sqlalchemy.orm import Session
 

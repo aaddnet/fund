@@ -9,7 +9,8 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/invest")
     auth_enabled: bool = os.getenv("AUTH_ENABLED", "true").lower() not in {"0", "false", "no"}
     auth_mode: str = os.getenv("AUTH_MODE", "hybrid").strip().lower()
-    auth_allow_dev_fallback: bool = os.getenv("AUTH_ALLOW_DEV_FALLBACK", "true").lower() not in {"0", "false", "no"}
+    # Default false; set AUTH_ALLOW_DEV_FALLBACK=true only for local dev / hybrid mode.
+    auth_allow_dev_fallback: bool = os.getenv("AUTH_ALLOW_DEV_FALLBACK", "false").lower() not in {"0", "false", "no"}
     auth_secret_key: str = os.getenv("AUTH_SECRET_KEY", "change-me-invest-dev-secret")
     auth_token_ttl_hours: int = int(os.getenv("AUTH_TOKEN_TTL_HOURS", "12"))
     auth_access_token_ttl_minutes: int = int(os.getenv("AUTH_ACCESS_TOKEN_TTL_MINUTES", str(int(os.getenv("AUTH_TOKEN_TTL_HOURS", "12")) * 60)))

@@ -647,6 +647,52 @@ def require_client_scope(actor: Actor, client_id: Optional[int]) -> Actor:
     return actor
 
 
+def change_password(db: Session, user_id: int, old_password: str, new_password: str) -> None:
+    user = db.query(AuthUser).filter(AuthUser.id == user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=404, detail="user not found")
+    if not verify_password(old_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="old password is incorrect")
+    validate_password_policy(new_password)
+    user.password_hash = hash_password(new_password)
+    user.password_changed_at = _utcnow()
+    # Revoke all active sessions so existing tokens are invalidated after a password change.
+    db.query(AuthSession).filter(
+        AuthSession.user_id == user_id,
+        AuthSession.revoked_at.is_(None),
+    ).update({"revoked_at": _utcnow()}, synchronize_session=False)
+    db.commit()
+
+
+def list_users(db: Session) -> list[dict]:
+    users = db.query(AuthUser).order_by(AuthUser.id.asc()).all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "role": u.role,
+            "display_name": u.display_name,
+            "is_active": u.is_active,
+            "client_scope_id": u.client_scope_id,
+            "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+            "password_changed_at": u.password_changed_at.isoformat() if u.password_changed_at else None,
+            "failed_login_attempts": u.failed_login_attempts,
+            "locked_until": u.locked_until.isoformat() if u.locked_until else None,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        }
+        for u in users
+    ]
+
+
+def unlock_user(db: Session, user_id: int) -> dict:
+    user = db.query(AuthUser).filter(AuthUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+    _clear_failed_login(user)
+    db.commit()
+    return {"id": user.id, "username": user.username, "locked_until": None, "failed_login_attempts": 0}
+
+
 def apply_client_scope_filters(actor: Actor, fund_id: Optional[int], client_id: Optional[int]) -> tuple[Optional[int], Optional[int]]:
     if actor.role != ROLE_CLIENT_READONLY:
         return fund_id, client_id

@@ -29,6 +29,7 @@ services:
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       AUTH_MODE: ${AUTH_MODE:-hybrid}
       AUTH_ALLOW_DEV_FALLBACK: ${AUTH_ALLOW_DEV_FALLBACK:-true}
+      # IMPORTANT: override AUTH_SECRET_KEY with a strong random value in production.
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-change-me-invest-dev-secret}
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}
     ports:

@@ -5,7 +5,6 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
@@ -34,16 +33,13 @@ from app.services.auth import (
     admin_reset_password,
     apply_client_scope_filters,
     change_password,
-    create_auth_user,
-    get_actor,
-    list_auth_users,
+ main
     login_with_password,
     refresh_access_token,
     require_client_scope,
     require_permissions,
     require_roles,
     revoke_session,
-    update_auth_user,
     permissions_for_role,
 )
 from app.services.exchange_rate import fetch_and_save_rates
@@ -111,56 +107,6 @@ def auth_logout(response: Response, actor: Actor = Depends(get_actor), db: Sessi
     return response
 
 
-@router.get("/auth/users")
-def auth_user_list(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_permissions(actor, "auth.manage")
-    return [_serialize_auth_user(item) for item in list_auth_users(db)]
-
-
-@router.post("/auth/users")
-def auth_user_create(req: AuthUserCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_permissions(actor, "auth.manage")
-    user = create_auth_user(
-        db,
-        username=req.username,
-        password=req.password,
-        role=req.role,
-        client_scope_id=req.client_scope_id,
-        display_name=req.display_name,
-        is_active=req.is_active,
-    )
-    record_audit(db, actor, action="auth.user.create", entity_type="auth_user", entity_id=str(user.id), detail={"username": user.username, "role": user.role})
-    return _serialize_auth_user(user)
-
-
-@router.patch("/auth/users/{user_id}")
-def auth_user_update(user_id: int, req: AuthUserUpdateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_permissions(actor, "auth.manage")
-    user = update_auth_user(
-        db,
-        user_id=user_id,
-        role=req.role,
-        client_scope_id=req.client_scope_id,
-        display_name=req.display_name,
-        is_active=req.is_active,
-    )
-    record_audit(db, actor, action="auth.user.update", entity_type="auth_user", entity_id=str(user.id), detail={"username": user.username, "role": user.role, "is_active": user.is_active})
-    return _serialize_auth_user(user)
-
-
-@router.post("/auth/change-password")
-def auth_change_password(req: AuthPasswordChangeRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    user = change_password(db, actor=actor, current_password=req.current_password, new_password=req.new_password)
-    record_audit(db, actor, action="auth.password.change", entity_type="auth_user", entity_id=str(user.id), detail={"username": user.username})
-    return {"status": "ok", "user": _serialize_auth_user(user)}
-
-
-@router.post("/auth/users/{user_id}/reset-password")
-def auth_user_reset_password(user_id: int, req: AuthPasswordResetRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_permissions(actor, "auth.manage")
-    user = admin_reset_password(db, user_id=user_id, new_password=req.new_password)
-    record_audit(db, actor, action="auth.password.reset", entity_type="auth_user", entity_id=str(user.id), detail={"username": user.username})
-    return {"status": "ok", "user": _serialize_auth_user(user)}
 
 
 @router.post("/rates/fetch")
@@ -749,6 +695,81 @@ def get_reports_overview(
             "nav_trend": _aggregate_nav_series(nav_rows),
         },
     }
+
+
+@router.get("/reports/export")
+def export_reports(
+    period_type: str = Query("quarter"),
+    period_value: str = Query(...),
+    fund_id: Optional[int] = None,
+    client_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    require_permissions(actor, "reports.read")
+    fund_id, client_id = apply_client_scope_filters(actor, fund_id, client_id)
+    start_date, end_date = _resolve_period(period_type, period_value)
+
+    share_rows = history(db, fund_id=fund_id, client_id=client_id, date_from=start_date, date_to=end_date)
+
+    nav_query = db.query(NAVRecord).filter(and_(NAVRecord.nav_date >= start_date, NAVRecord.nav_date <= end_date))
+    if fund_id is not None:
+        nav_query = nav_query.filter(NAVRecord.fund_id == fund_id)
+    elif actor.role == ROLE_CLIENT_READONLY:
+        nav_query = nav_query.filter(NAVRecord.fund_id.in_(_client_fund_ids(db, actor.client_scope_id)))
+    nav_rows = [_serialize_nav(item) for item in nav_query.order_by(NAVRecord.nav_date.asc()).all()]
+
+    fee_rows = []
+    if actor.role != ROLE_CLIENT_READONLY:
+        fee_query = db.query(FeeRecord).filter(and_(FeeRecord.fee_date >= start_date, FeeRecord.fee_date <= end_date))
+        if fund_id is not None:
+            fee_query = fee_query.filter(FeeRecord.fund_id == fund_id)
+        fee_rows = [_serialize_fee(item) for item in fee_query.order_by(FeeRecord.fee_date.asc()).all()]
+
+    transaction_query = db.query(Transaction).filter(and_(Transaction.trade_date >= start_date, Transaction.trade_date <= end_date))
+    if fund_id is not None or client_id is not None or actor.role == ROLE_CLIENT_READONLY:
+        transaction_query = transaction_query.join(Account, Account.id == Transaction.account_id)
+        if fund_id is not None:
+            transaction_query = transaction_query.filter(Account.fund_id == fund_id)
+        if client_id is not None:
+            transaction_query = transaction_query.filter(Account.client_id == client_id)
+        elif actor.role == ROLE_CLIENT_READONLY:
+            transaction_query = transaction_query.filter(Account.client_id == actor.client_scope_id)
+    transaction_rows = [_serialize_transaction(item) for item in transaction_query.order_by(Transaction.trade_date.asc()).all()]
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(["# Share Flow"])
+    writer.writerow(["tx_date", "fund_id", "client_id", "tx_type", "amount_usd", "shares", "nav_at_date"])
+    for row in share_rows:
+        writer.writerow([row["tx_date"], row["fund_id"], row["client_id"], row["tx_type"], row["amount_usd"], row["shares"], row["nav_at_date"]])
+
+    writer.writerow([])
+    writer.writerow(["# NAV Records"])
+    writer.writerow(["nav_date", "fund_id", "total_assets_usd", "total_shares", "nav_per_share"])
+    for row in nav_rows:
+        writer.writerow([row["nav_date"], row["fund_id"], row["total_assets_usd"], row["total_shares"], row["nav_per_share"]])
+
+    if fee_rows:
+        writer.writerow([])
+        writer.writerow(["# Fee Records"])
+        writer.writerow(["fee_date", "fund_id", "gross_return", "annual_return_pct", "excess_return_pct", "fee_rate", "fee_amount_usd", "nav_after_fee"])
+        for row in fee_rows:
+            writer.writerow([row["fee_date"], row["fund_id"], row["gross_return"], row["annual_return_pct"], row["excess_return_pct"], row["fee_rate"], row["fee_amount_usd"], row["nav_after_fee"]])
+
+    writer.writerow([])
+    writer.writerow(["# Transactions"])
+    writer.writerow(["trade_date", "account_id", "asset_code", "quantity", "price", "currency", "tx_type", "fee"])
+    for row in transaction_rows:
+        writer.writerow([row["trade_date"], row["account_id"], row["asset_code"], row["quantity"], row["price"], row["currency"], row["tx_type"], row["fee"]])
+
+    filename = f"report_{period_value}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @router.get("/audit")
