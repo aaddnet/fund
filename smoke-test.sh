@@ -77,7 +77,7 @@ curl -fsS -X POST "${AUTH_HEADER[@]}" "$BASE_URL/import/$IMPORT_BATCH_ID/confirm
 echo "== Client / Account CRUD flow =="
 NEW_CLIENT_ID="$(curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/client" -d '{"name":"Bob", "email":"bob@example.com"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "Created Client ID: $NEW_CLIENT_ID"
-NEW_ACCOUNT_ID="$(curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account" -d "{\"fund_id\":1, \"client_id\":$NEW_CLIENT_ID, \"broker\":\"TestBroker\", \"account_no\":\"TEST-123\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+NEW_ACCOUNT_ID="$(curl -fsS -X POST "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account" -d "{\"fund_id\":1, \"client_id\":$NEW_CLIENT_ID, \"broker\":\"TestBroker\", \"account_no\":\"TEST-$RANDOM\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "Created Account ID: $NEW_ACCOUNT_ID"
 curl -fsS -X PATCH "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/client/$NEW_CLIENT_ID" -d '{"name":"Bob Updated"}' && echo
 curl -fsS -X PATCH "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' "$BASE_URL/account/$NEW_ACCOUNT_ID" -d '{"broker":"TestBroker Updated"}' && echo
