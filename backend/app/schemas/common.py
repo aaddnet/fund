@@ -13,6 +13,17 @@ class RateFetchRequest(BaseModel):
     def normalize_currency(cls, v: str) -> str:
         return v.strip().upper()
 
+class RateManualRequest(BaseModel):
+    base: str
+    quote: str
+    rate: Decimal
+    snapshot_date: date
+
+    @field_validator("base", "quote")
+    @classmethod
+    def normalize_currency(cls, v: str) -> str:
+        return v.strip().upper()
+
 
 class PriceFetchRequest(BaseModel):
     assets: list[str]
@@ -41,6 +52,14 @@ class FeeCalcRequest(BaseModel):
     fee_date: date
 
 from typing import Optional
+
+class FundCreateRequest(BaseModel):
+    name: str
+    base_currency: str = "USD"
+
+class FundUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    base_currency: Optional[str] = None
 
 class ClientCreateRequest(BaseModel):
     name: str

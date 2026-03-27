@@ -22,9 +22,12 @@ from app.schemas.common import (
     AccountCreateRequest,
     AccountUpdateRequest,
     FeeCalcRequest,
+    FundCreateRequest,
+    FundUpdateRequest,
     NavCalcRequest,
     PriceFetchRequest,
     RateFetchRequest,
+    RateManualRequest,
     ShareRequest,
 )
 from app.services.audit import list_audit_logs, record_audit
@@ -46,7 +49,7 @@ from app.services.auth import (
     update_auth_user,
     permissions_for_role,
 )
-from app.services.exchange_rate import fetch_and_save_rates
+from app.services.exchange_rate import fetch_and_save_rates, save_rate_manual
 from app.services.fee_service import calc_fee, list_fees
 from app.services.import_service import confirm_batch, get_batch, list_batches, serialize_batch, upload_csv
 from app.services.nav_engine import calc_nav, list_nav
@@ -147,6 +150,22 @@ def get_rates(
     if quote:
         query = query.filter(ExchangeRate.quote_currency == quote.upper())
     return _paginate(query.order_by(ExchangeRate.snapshot_date.desc(), ExchangeRate.id.desc()), page, size, _serialize_rate)
+
+
+@router.post("/rates/manual")
+def upsert_rate_manual(req: RateManualRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """Manually upsert an FX rate. Useful when the external API is unreachable (e.g. in Docker without outbound network)."""
+    require_permissions(actor, "rates.write")
+    row = save_rate_manual(db, req.base, req.quote, float(req.rate), req.snapshot_date)
+    record_audit(
+        db,
+        actor,
+        action="rate.manual",
+        entity_type="exchange_rate",
+        entity_id=str(row.id),
+        detail={"base": req.base, "quote": req.quote, "rate": float(req.rate), "snapshot_date": req.snapshot_date.isoformat()},
+    )
+    return _serialize_rate(row)
 
 
 @router.post("/price/fetch")
@@ -378,6 +397,33 @@ def get_fund(fund_id: int, db: Session = Depends(get_db), actor: Actor = Depends
     if not item:
         raise HTTPException(status_code=404, detail="Fund not found.")
     return _serialize_fund(item)
+
+
+@router.post("/fund")
+def create_fund(req: FundCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.write")
+    fund = Fund(name=req.name.strip(), base_currency=req.base_currency.upper().strip())
+    db.add(fund)
+    db.commit()
+    db.refresh(fund)
+    record_audit(db, actor, action="fund.create", entity_type="fund", entity_id=str(fund.id), detail={"name": fund.name, "base_currency": fund.base_currency})
+    return _serialize_fund(fund)
+
+
+@router.patch("/fund/{fund_id}")
+def update_fund(fund_id: int, req: FundUpdateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.write")
+    fund = db.query(Fund).filter(Fund.id == fund_id).first()
+    if not fund:
+        raise HTTPException(status_code=404, detail="Fund not found.")
+    if req.name is not None:
+        fund.name = req.name.strip()
+    if req.base_currency is not None:
+        fund.base_currency = req.base_currency.upper().strip()
+    db.commit()
+    db.refresh(fund)
+    record_audit(db, actor, action="fund.update", entity_type="fund", entity_id=str(fund.id), detail={"name": fund.name})
+    return _serialize_fund(fund)
 
 
 @router.get("/client")

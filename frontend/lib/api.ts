@@ -455,6 +455,14 @@ export async function getFunds(page = 1, size = 50, accessToken?: string | null)
   return fetchJson<ApiListResponse<Fund>>(`/fund${buildQuery({ page, size })}`, { accessToken });
 }
 
+export async function createFund(data: { name: string; base_currency?: string }) {
+  return fetchJson<Fund>('/fund', { method: 'POST', body: data });
+}
+
+export async function updateFund(fundId: number, data: { name?: string; base_currency?: string }) {
+  return fetchJson<Fund>(`/fund/${fundId}`, { method: 'PATCH', body: data });
+}
+
 export async function getClients(params?: { page?: number; size?: number; fundId?: number; q?: string; accessToken?: string | null }) {
   return fetchJson<ApiListResponse<Client>>(`/client${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, q: params?.q })}`, { accessToken: params?.accessToken });
 }

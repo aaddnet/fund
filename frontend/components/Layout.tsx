@@ -25,6 +25,7 @@ export default function Layout({ title, children, subtitle, requiredPermission }
     { href: '/dashboard', label: t('dashboard'), requiredPermission: 'dashboard.read' },
     { href: '/nav', label: t('nav'), requiredPermission: 'nav.read' },
     { href: '/shares', label: t('shares'), requiredPermission: 'shares.read' },
+    { href: '/funds', label: t('funds'), requiredPermission: 'nav.read' },
     { href: '/accounts', label: t('accounts'), requiredPermission: 'accounts.read' },
     { href: '/clients', label: t('clients'), requiredPermission: 'clients.read' },
     { href: '/reports', label: t('reports'), requiredPermission: 'reports.read' },

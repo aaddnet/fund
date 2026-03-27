@@ -106,7 +106,7 @@ function downloadReport(report: ReportOverview, type: 'json' | 'csv') {
 }
 
 export default function Page({ report, funds, clients, filters, error }: Props) {
-
+  const { t } = useI18n();
 
   return (
     <Layout title={t('reportsTitle')} subtitle={t('reportsSubtitle')} requiredPermission='reports.read'>
