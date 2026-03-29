@@ -60,6 +60,8 @@ export type Client = {
   fund_count?: number;
   fund_ids?: number[];
   total_share_balance?: number;
+  total_holding_value_usd?: number | null;
+  holding_currency?: string | null;
   share_tx_count?: number;
   latest_trade_date?: string | null;
   latest_share_tx_date?: string | null;
@@ -76,6 +78,7 @@ export type Account = {
   position_count: number;
   transaction_count: number;
   latest_snapshot_date?: string | null;
+  latest_snapshot_value_usd?: number | null;
   latest_trade_date?: string | null;
 };
 
@@ -105,6 +108,7 @@ export type Transaction = {
 export type NavRecord = {
   id: number;
   fund_id: number;
+  fund_name?: string | null;
   nav_date: string;
   total_assets_usd: number;
   total_shares: number;
@@ -332,7 +336,15 @@ async function fetchJson<T>(path: string, init?: FetchOptions): Promise<T> {
     let message = `API ${path} failed with ${response.status}`;
     try {
       const body = await response.json();
-      message = body.detail || JSON.stringify(body);
+      if (typeof body.detail === 'string') {
+        message = body.detail;
+      } else if (Array.isArray(body.detail)) {
+        message = (body.detail as Array<{ msg?: string }>).map(e => e.msg || JSON.stringify(e)).join('; ');
+      } else if (body.detail) {
+        message = JSON.stringify(body.detail);
+      } else {
+        message = JSON.stringify(body);
+      }
     } catch {
       const text = await response.text();
       if (text) {
@@ -517,6 +529,10 @@ export async function createNav(payload: { fund_id: number; nav_date: string }) 
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function deleteNav(navId: number) {
+  return fetchJson<void>(`/nav/${navId}`, { method: 'DELETE' });
 }
 
 export async function createShareSubscription(payload: { fund_id: number; client_id: number; tx_date: string; amount_usd: number }) {

@@ -35,7 +35,21 @@ def calc_nav(db: Session, fund_id: int, nav_date):
         .all()
     )
     if not positions:
-        raise ValueError(f"No positions found for fund {fund_id} on {nav_date}.")
+        # No positions on this date (e.g. historical date before fund had positions).
+        # Return a $0 NAV record instead of raising an error.
+        total_shares_zero = Decimal(str(fund.total_shares or 1))
+        nav_zero = NAVRecord(
+            fund_id=fund_id,
+            nav_date=nav_date,
+            total_assets_usd=ZERO,
+            total_shares=total_shares_zero,
+            nav_per_share=ZERO,
+            is_locked=True,
+        )
+        db.add(nav_zero)
+        db.commit()
+        db.refresh(nav_zero)
+        return nav_zero
 
     price_map = {
         row.asset_code.upper(): row

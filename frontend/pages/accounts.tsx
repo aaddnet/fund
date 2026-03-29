@@ -1,6 +1,14 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import Layout from '../components/Layout';
+
+const BROKERS = [
+  { value: 'moomoo', label: 'Moomoo / Futu' },
+  { value: 'ib', label: 'Interactive Brokers' },
+  { value: 'schwab', label: 'Charles Schwab' },
+  { value: 'kraken', label: 'Kraken' },
+  { value: 'other', label: 'Other' },
+];
 import ProductTable from '../components/ProductTable';
 import FormField from '../components/FormField';
 import Modal from '../components/Modal';
@@ -164,6 +172,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
             { key: 'transactions', title: t('transactions'), render: (item) => item.transaction_count },
             { key: 'trade', title: t('latestTrade'), render: (item) => item.latest_trade_date || t('notAvailable') },
             { key: 'snapshot', title: t('latestSnapshot'), render: (item) => item.latest_snapshot_date || t('notAvailable') },
+            { key: 'snapValue', title: 'Snapshot Value (USD)', render: (item) => item.latest_snapshot_value_usd != null ? `$${item.latest_snapshot_value_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : t('notAvailable') },
             ...(canWrite ? [{
               key: 'actions', title: 'Actions', render: (item: Account) => (
                 <button
@@ -193,7 +202,10 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
             </select>
           </FormField>
           <FormField label="Broker">
-            <input required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={submitting} />
+            <select required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={submitting}>
+              <option value="">Select Broker</option>
+              {BROKERS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+            </select>
           </FormField>
           <FormField label="Account No">
             <input required style={styles.input} value={accountNo} onChange={e => setAccountNo(e.target.value)} disabled={submitting} />
@@ -222,7 +234,10 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
             </select>
           </FormField>
           <FormField label="Broker">
-            <input required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={submitting} />
+            <select required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={submitting}>
+              <option value="">Select Broker</option>
+              {BROKERS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+            </select>
           </FormField>
           <FormField label="Account No">
             <input required style={styles.input} value={accountNo} onChange={e => setAccountNo(e.target.value)} disabled={submitting} />

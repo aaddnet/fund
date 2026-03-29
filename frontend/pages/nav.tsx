@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { createNav, getFunds, getNav, Fund, NavRecord } from '../lib/api';
+import { createNav, deleteNav, getFunds, getNav, Fund, NavRecord } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { requirePageAuth } from '../lib/pageAuth';
@@ -28,6 +28,19 @@ export default function Page({ nav, funds, error }: Props) {
   const [fundId, setFundId] = useState(defaultFundId);
   const [navDate, setNavDate] = useState('2026-06-30');
   const [submitting, setSubmitting] = useState(false);
+  const fundMap = useMemo(() => Object.fromEntries(funds.map(f => [f.id, f.name])), [funds]);
+
+  async function handleDeleteNav(navId: number) {
+    if (!canWriteNav) return;
+    if (!confirm('Delete this NAV record? This will also delete the associated asset snapshots.')) return;
+    try {
+      await deleteNav(navId);
+      setRows(current => current.filter(r => r.id !== navId));
+      showToast('NAV record deleted.', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to delete NAV record.', 'error');
+    }
+  }
 
   async function handleCreateNav(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -79,11 +92,18 @@ export default function Page({ nav, funds, error }: Props) {
           rows={rows}
           columns={[
             { key: 'date', title: t('date'), render: (item) => item.nav_date },
-            { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
-            { key: 'assets', title: 'Assets USD', render: (item) => formatNumber(item.total_assets_usd) },
+            { key: 'fund', title: t('fund'), render: (item) => `${fundMap[item.fund_id] ?? item.fund_name ?? 'Fund'} #${item.fund_id}` },
+            { key: 'assets', title: 'Assets USD', render: (item) => item.total_assets_usd === 0 ? '— (no positions)' : formatNumber(item.total_assets_usd) },
             { key: 'shares', title: t('sharesLabel'), render: (item) => formatNumber(item.total_shares, 8) },
-            { key: 'nav', title: 'NAV / Share', render: (item) => formatNumber(item.nav_per_share) },
+            { key: 'nav', title: 'NAV / Share', render: (item) => item.nav_per_share === 0 ? '— (no positions)' : formatNumber(item.nav_per_share) },
             { key: 'locked', title: t('locked'), render: (item) => (item.is_locked ? t('yes') : t('no')) },
+            ...(canWriteNav ? [{
+              key: 'del', title: '', render: (item: NavRecord) => (
+                <button style={{ ...styles.buttonSecondary, padding: '4px 8px', fontSize: 12, color: colors.danger, borderColor: colors.danger }} onClick={() => handleDeleteNav(item.id)}>
+                  Delete
+                </button>
+              ),
+            }] : []),
           ]}
         />
       </div>

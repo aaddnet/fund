@@ -267,7 +267,7 @@ def run_nav(req: NavCalcRequest, db: Session = Depends(get_db), actor: Actor = D
             entity_id=str(row.id),
             detail={"fund_id": req.fund_id, "nav_date": req.nav_date.isoformat()},
         )
-        return _serialize_nav(row)
+        return _serialize_nav(row, db)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -277,8 +277,23 @@ def get_nav_records(fund_id: Optional[int] = None, db: Session = Depends(get_db)
     require_permissions(actor, "nav.read")
     if actor.role == ROLE_CLIENT_READONLY and fund_id is None:
         fund_ids = _client_fund_ids(db, actor.client_scope_id)
-        return [_serialize_nav(item) for item in list_nav(db) if item.fund_id in fund_ids]
-    return [_serialize_nav(item) for item in list_nav(db, fund_id=fund_id)]
+        return [_serialize_nav(item, db) for item in list_nav(db) if item.fund_id in fund_ids]
+    return [_serialize_nav(item, db) for item in list_nav(db, fund_id=fund_id)]
+
+
+@router.delete("/nav/{nav_id}", status_code=204)
+def delete_nav(nav_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "nav.write")
+    item = db.query(NAVRecord).filter(NAVRecord.id == nav_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="NAV record not found.")
+    fund_id = item.fund_id
+    nav_date = item.nav_date.isoformat()
+    from app.models import AssetSnapshot as _AssetSnapshot
+    db.query(_AssetSnapshot).filter(_AssetSnapshot.nav_record_id == nav_id).delete()
+    db.delete(item)
+    db.commit()
+    record_audit(db, actor, action="nav.delete", entity_type="nav_record", entity_id=str(nav_id), detail={"fund_id": fund_id, "nav_date": nav_date})
 
 
 @router.post("/share/subscribe")
@@ -594,7 +609,7 @@ def update_account(account_id: int, req: AccountUpdateRequest, db: Session = Dep
     require_client_scope(actor, item.client_id)
     if req.fund_id is not None:
         item.fund_id = req.fund_id
-    if req.client_id is not None:
+    if 'client_id' in req.model_fields_set:
         item.client_id = req.client_id
     if req.broker is not None:
         item.broker = req.broker
@@ -700,7 +715,7 @@ def get_customer_view(client_id: int, db: Session = Depends(get_db), actor: Acto
     fund_ids = sorted({account.fund_id for account in account_rows})
     share_balance_rows = balances(db, client_id=client_id)
     share_history_rows = history(db, client_id=client_id)
-    nav_rows = [_serialize_nav(item) for item in list_nav(db)]
+    nav_rows = [_serialize_nav(item, db) for item in list_nav(db)]
     relevant_nav = [row for row in nav_rows if row["fund_id"] in fund_ids]
 
     return {
@@ -734,7 +749,7 @@ def get_reports_overview(
         nav_query = nav_query.filter(NAVRecord.fund_id == fund_id)
     elif actor.role == ROLE_CLIENT_READONLY:
         nav_query = nav_query.filter(NAVRecord.fund_id.in_(_client_fund_ids(db, actor.client_scope_id)))
-    nav_rows = [_serialize_nav(item) for item in nav_query.order_by(NAVRecord.nav_date.desc(), NAVRecord.id.desc()).all()]
+    nav_rows = [_serialize_nav(item, db) for item in nav_query.order_by(NAVRecord.nav_date.desc(), NAVRecord.id.desc()).all()]
 
     fee_rows = []
     if actor.role != ROLE_CLIENT_READONLY:
@@ -820,7 +835,7 @@ def export_reports(
         nav_query = nav_query.filter(NAVRecord.fund_id == fund_id)
     elif actor.role == ROLE_CLIENT_READONLY:
         nav_query = nav_query.filter(NAVRecord.fund_id.in_(_client_fund_ids(db, actor.client_scope_id)))
-    nav_rows = [_serialize_nav(item) for item in nav_query.order_by(NAVRecord.nav_date.asc()).all()]
+    nav_rows = [_serialize_nav(item, db) for item in nav_query.order_by(NAVRecord.nav_date.asc()).all()]
 
     fee_rows = []
     if actor.role != ROLE_CLIENT_READONLY:
@@ -940,6 +955,7 @@ def _serialize_fund(item: Fund) -> dict:
 
 
 def _serialize_client(db: Session, item: Client) -> dict:
+    from decimal import Decimal as _D
     account_rows = db.query(Account).filter(Account.client_id == item.id).all()
     fund_ids = sorted({account.fund_id for account in account_rows})
     share_balance_rows = balances(db, client_id=item.id)
@@ -947,6 +963,17 @@ def _serialize_client(db: Session, item: Client) -> dict:
     share_history_rows = history(db, client_id=item.id)
     latest_tx_date = db.query(func.max(Transaction.trade_date)).join(Account, Account.id == Transaction.account_id).filter(Account.client_id == item.id).scalar()
     latest_share_event_date = share_history_rows[0]["tx_date"] if share_history_rows else None
+
+    # Compute holding value: shares × latest locked NAV per share, per fund
+    total_holding_usd = _D("0")
+    for row in share_balance_rows:
+        f_id = row["fund_id"]
+        latest_nav = db.query(NAVRecord).filter(
+            NAVRecord.fund_id == f_id,
+            NAVRecord.is_locked == True,  # noqa: E712
+        ).order_by(NAVRecord.nav_date.desc()).first()
+        if latest_nav and latest_nav.nav_per_share:
+            total_holding_usd += _D(str(row["share_balance"])) * _D(str(latest_nav.nav_per_share))
 
     return {
         "id": item.id,
@@ -956,6 +983,8 @@ def _serialize_client(db: Session, item: Client) -> dict:
         "fund_count": len(fund_ids),
         "fund_ids": fund_ids,
         "total_share_balance": total_share_balance,
+        "total_holding_value_usd": float(total_holding_usd),
+        "holding_currency": "USD",
         "share_tx_count": len(share_history_rows),
         "latest_trade_date": latest_tx_date.isoformat() if latest_tx_date else None,
         "latest_share_tx_date": latest_share_event_date,
@@ -971,6 +1000,20 @@ def _serialize_account(db: Session, item: Account) -> dict:
     latest_trade_date = db.query(func.max(Transaction.trade_date)).filter(Transaction.account_id == item.id).scalar()
     fund = db.query(Fund).filter(Fund.id == item.fund_id).first()
     client = db.query(Client).filter(Client.id == item.client_id).first() if item.client_id else None
+
+    # Snapshot cost-basis value (quantity × average_cost) for latest snapshot date
+    latest_snapshot_value_usd = None
+    if latest_snapshot_date:
+        snap_positions = db.query(Position).filter(
+            Position.account_id == item.id,
+            Position.snapshot_date == latest_snapshot_date,
+        ).all()
+        if snap_positions:
+            latest_snapshot_value_usd = sum(
+                float(p.quantity) * float(p.average_cost or 0)
+                for p in snap_positions
+            )
+
     return {
         "id": item.id,
         "fund_id": item.fund_id,
@@ -982,6 +1025,7 @@ def _serialize_account(db: Session, item: Account) -> dict:
         "position_count": int(position_count),
         "transaction_count": int(transaction_count),
         "latest_snapshot_date": latest_snapshot_date.isoformat() if latest_snapshot_date else None,
+        "latest_snapshot_value_usd": latest_snapshot_value_usd,
         "latest_trade_date": latest_trade_date.isoformat() if latest_trade_date else None,
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
@@ -1019,10 +1063,15 @@ def _serialize_transaction(item: Transaction) -> dict:
     }
 
 
-def _serialize_nav(item) -> dict:
+def _serialize_nav(item, db: Session = None) -> dict:
+    fund_name = None
+    if db is not None:
+        _fund = db.query(Fund).filter(Fund.id == item.fund_id).first()
+        fund_name = _fund.name if _fund else None
     return {
         "id": item.id,
         "fund_id": item.fund_id,
+        "fund_name": fund_name,
         "nav_date": item.nav_date.isoformat(),
         "total_assets_usd": _decimal(item.total_assets_usd),
         "total_shares": _decimal(item.total_shares),

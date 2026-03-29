@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { useMemo } from 'react';
 import Layout from '../../components/Layout';
 import ProductTable from '../../components/ProductTable';
 import { Client, CustomerView, getClients, getCustomerView } from '../../lib/api';
@@ -15,6 +16,18 @@ type Props = {
 
 export default function Page({ customer, clients, selectedClientId, error }: Props) {
   const { t } = useI18n();
+
+  // Latest locked NAV per share per fund, for computing holding value
+  const latestNavPerFund = useMemo(() => {
+    const map: Record<number, number> = {};
+    [...(customer?.nav_history ?? [])]
+      .filter(r => r.is_locked)
+      .sort((a, b) => b.nav_date.localeCompare(a.nav_date))
+      .forEach(r => {
+        if (!(r.fund_id in map)) map[r.fund_id] = r.nav_per_share;
+      });
+    return map;
+  }, [customer]);
 
   return (
     <Layout title={t('customerTitle')} subtitle={t('customerSubtitle')} requiredPermission='customer.read'>
@@ -55,8 +68,13 @@ export default function Page({ customer, clients, selectedClientId, error }: Pro
           rows={customer?.share_balances ?? []}
           columns={[
             { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
-            { key: 'client', title: t('client'), render: (item) => item.client_id },
             { key: 'balance', title: t('sharesLabel'), render: (item) => formatNumber(item.share_balance, 8) },
+            { key: 'value', title: 'Holding Value (USD)', render: (item) => {
+              const nav = latestNavPerFund[item.fund_id];
+              if (!nav) return t('notAvailable');
+              const value = item.share_balance * nav;
+              return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            }},
           ]}
         />
       </div>

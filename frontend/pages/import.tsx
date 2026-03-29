@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
@@ -46,6 +46,19 @@ export default function Page({ batches, accounts, error }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const selectedBatch = useMemo(() => rows.find((item) => item.id === selectedBatchId) ?? rows[0] ?? null, [rows, selectedBatchId]);
+
+  // Filter accounts by selected source/broker (csv = show all)
+  const filteredAccounts = useMemo(() => {
+    if (source === 'csv') return accounts;
+    return accounts.filter(a => a.broker === source);
+  }, [accounts, source]);
+
+  // When source changes, reset accountId to first matching account
+  useEffect(() => {
+    if (filteredAccounts.length > 0 && !filteredAccounts.find(a => String(a.id) === accountId)) {
+      setAccountId(String(filteredAccounts[0].id));
+    }
+  }, [filteredAccounts]);
 
   function mergeBatch(batch: ImportBatch) {
     setRows((current) => {
@@ -184,7 +197,10 @@ export default function Page({ batches, accounts, error }: Props) {
           </FormField>
           <FormField label={t('accountId')}>
             <select style={styles.input} value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={submitting}>
-              {accounts.map((a) => (
+              {filteredAccounts.length === 0 && (
+                <option value="">— No {source} accounts found —</option>
+              )}
+              {filteredAccounts.map((a) => (
                 <option key={a.id} value={a.id}>
                   #{a.id} · {a.fund_name ?? `Fund ${a.fund_id}`} / {a.broker} ({a.account_no})
                 </option>

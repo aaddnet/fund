@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import FormField from '../components/FormField';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
@@ -58,6 +58,15 @@ export default function Page({ shares, balances, funds, clients, navRecords, err
     const first = navRecords.find((r) => r.is_locked);
     return first?.nav_date ?? '';
   });
+
+  // When fund changes, auto-select the first locked NAV date of that fund
+  useEffect(() => {
+    if (lockedNavDates.length > 0 && !lockedNavDates.includes(txDate)) {
+      setTxDate(lockedNavDates[0]);
+    } else if (lockedNavDates.length === 0) {
+      setTxDate('');
+    }
+  }, [lockedNavDates]);
   const [amountUsd, setAmountUsd] = useState('500');
   const [submitting, setSubmitting] = useState(false);
 
