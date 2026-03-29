@@ -15,6 +15,14 @@ type Props = {
   error?: string;
 };
 
+const SOURCES = [
+  { value: 'csv',    label: 'Generic CSV' },
+  { value: 'moomoo', label: 'Moomoo / Futu' },
+  { value: 'ib',     label: 'Interactive Brokers' },
+  { value: 'schwab', label: 'Charles Schwab' },
+  { value: 'kraken', label: 'Kraken' },
+];
+
 const statusColorMap: Record<string, string> = {
   uploaded: colors.warning,
   parsed: colors.primary,
@@ -169,7 +177,9 @@ export default function Page({ batches, error }: Props) {
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={t('uploadCsv')}>
         <form onSubmit={handleUpload} style={{ display: 'grid', gap: 14 }}>
           <FormField label={t('source')}>
-            <input style={styles.input} value={source} onChange={(event) => setSource(event.target.value)} disabled={submitting} />
+            <select style={styles.input} value={source} onChange={(event) => setSource(event.target.value)} disabled={submitting}>
+              {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
           </FormField>
           <FormField label={t('accountId')}>
             <input style={styles.input} value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={submitting} />
