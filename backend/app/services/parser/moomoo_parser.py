@@ -32,11 +32,13 @@ _COL_ALIASES: dict[str, str] = {
     "ticker": "asset_code",
     "code": "asset_code",
     "股票代码": "asset_code",
+    "代码": "asset_code",
     # Side / direction
     "side": "tx_type",
     "direction": "tx_type",
     "buy/sell": "tx_type",
     "买卖": "tx_type",
+    "方向": "tx_type",
     # Quantity
     "qty.": "quantity",
     "qty": "quantity",
@@ -52,12 +54,14 @@ _COL_ALIASES: dict[str, str] = {
     "price(hkd)": "price",
     "execution price": "price",
     "成交均价": "price",
+    "成交价格": "price",
     # Fee
     "trading fees": "fee",
     "fees": "fee",
     "fee": "fee",
     "commission": "fee",
     "手续费": "fee",
+    "合计费用": "fee",
     # Currency
     "currency": "currency",
     "ccy": "currency",
@@ -66,6 +70,7 @@ _COL_ALIASES: dict[str, str] = {
     "status": "status",
     "order status": "status",
     "状态": "status",
+    "交易状态": "status",
 }
 
 # Side values → standard tx_type
@@ -112,6 +117,9 @@ def preprocess(raw: bytes) -> bytes:
     writer.writerow(["trade_date", "asset_code", "quantity", "price", "currency", "fee", "tx_type"])
 
     has_rows = False
+    last_asset: str = ""
+    last_tx_type_raw: str = ""
+
     for row in reader:
         # Normalise row
         norm: dict[str, str] = {}
@@ -125,8 +133,16 @@ def preprocess(raw: bytes) -> bytes:
         price = norm.get("price", "")
         fee = norm.get("fee", "0") or "0"
         currency = norm.get("currency", "USD") or "USD"
-        tx_type_raw = norm.get("tx_type", "").lower()
+        tx_type_raw = norm.get("tx_type", "")
         status = norm.get("status", "").lower()
+
+        # Partial fill continuation rows: no symbol/direction, inherit from parent order
+        if not asset_code and not tx_type_raw:
+            asset_code = last_asset
+            tx_type_raw = last_tx_type_raw
+        else:
+            last_asset = asset_code
+            last_tx_type_raw = tx_type_raw
 
         # Only import filled orders; allow rows with no status column (status="")
         if status and status not in _FILLED_STATUSES:
@@ -135,10 +151,10 @@ def preprocess(raw: bytes) -> bytes:
         if not trade_date or not asset_code:
             continue
 
-        # Strip time component from date field
+        # Strip time component and timezone suffix from date field
         trade_date = trade_date.split(" ")[0]
 
-        tx_type = _SIDE_MAP.get(tx_type_raw)
+        tx_type = _SIDE_MAP.get(tx_type_raw.lower())
         if tx_type is None:
             continue
 
