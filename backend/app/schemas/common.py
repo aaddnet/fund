@@ -71,7 +71,7 @@ class ClientUpdateRequest(BaseModel):
 
 class AccountCreateRequest(BaseModel):
     fund_id: int
-    client_id: int
+    client_id: Optional[int] = None
     broker: str
     account_no: str
 

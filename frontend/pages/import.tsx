@@ -4,7 +4,7 @@ import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { confirmImportBatch, getImportBatches, ImportBatch, uploadImportBatch } from '../lib/api';
+import { Account, confirmImportBatch, getAccounts, getImportBatches, ImportBatch, uploadImportBatch } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { requirePageAuth } from '../lib/pageAuth';
@@ -12,6 +12,7 @@ import { colors, styles } from '../lib/ui';
 
 type Props = {
   batches: ImportBatch[];
+  accounts: Account[];
   error?: string;
 };
 
@@ -30,7 +31,7 @@ const statusColorMap: Record<string, string> = {
   failed: colors.danger,
 };
 
-export default function Page({ batches, error }: Props) {
+export default function Page({ batches, accounts, error }: Props) {
   const { hasPermission } = useAuth();
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -41,7 +42,7 @@ export default function Page({ batches, error }: Props) {
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [source, setSource] = useState('csv');
-  const [accountId, setAccountId] = useState('1');
+  const [accountId, setAccountId] = useState(() => String(accounts[0]?.id ?? '1'));
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const selectedBatch = useMemo(() => rows.find((item) => item.id === selectedBatchId) ?? rows[0] ?? null, [rows, selectedBatchId]);
@@ -182,7 +183,13 @@ export default function Page({ batches, error }: Props) {
             </select>
           </FormField>
           <FormField label={t('accountId')}>
-            <input style={styles.input} value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={submitting} />
+            <select style={styles.input} value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={submitting}>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  #{a.id} · {a.fund_name ?? `Fund ${a.fund_id}`} / {a.broker} ({a.account_no})
+                </option>
+              ))}
+            </select>
           </FormField>
           <FormField label={t('csvFile')}>
             <input style={styles.input} type='file' accept='.csv' onChange={(event) => setFile(event.target.files?.[0] || null)} disabled={submitting} />
@@ -207,8 +214,12 @@ export async function getServerSideProps(context: any) {
   }
 
   try {
-    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, batches: await getImportBatches(auth.accessToken) } };
+    const [batches, accountData] = await Promise.all([
+      getImportBatches(auth.accessToken),
+      getAccounts({ size: 100, accessToken: auth.accessToken }),
+    ]);
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, batches, accounts: accountData.items ?? [] } };
   } catch (error) {
-    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, batches: [], error: error instanceof Error ? error.message : 'unknown error' } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, batches: [], accounts: [], error: error instanceof Error ? error.message : 'unknown error' } };
   }
 }

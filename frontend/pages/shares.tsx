@@ -7,12 +7,14 @@ import { useToast } from '../components/Toast';
 import {
   Client,
   Fund,
+  NavRecord,
   ShareBalance,
   ShareTransaction,
   createShareRedemption,
   createShareSubscription,
   getClients,
   getFunds,
+  getNav,
   getShareBalances,
   getShareHistory,
 } from '../lib/api';
@@ -26,12 +28,13 @@ type Props = {
   balances: ShareBalance[];
   funds: Fund[];
   clients: Client[];
+  navRecords: NavRecord[];
   error?: string;
 };
 
 type FormMode = 'subscribe' | 'redeem';
 
-export default function Page({ shares, balances, funds, clients, error }: Props) {
+export default function Page({ shares, balances, funds, clients, navRecords, error }: Props) {
   const { hasPermission } = useAuth();
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -47,7 +50,14 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
   const [mode, setMode] = useState<FormMode>('subscribe');
   const [fundId, setFundId] = useState(defaultFundId);
   const [clientId, setClientId] = useState(defaultClientId);
-  const [txDate, setTxDate] = useState('2026-06-30');
+  const lockedNavDates = useMemo(
+    () => navRecords.filter((r) => r.is_locked && String(r.fund_id) === fundId).map((r) => r.nav_date).sort().reverse(),
+    [navRecords, fundId],
+  );
+  const [txDate, setTxDate] = useState(() => {
+    const first = navRecords.find((r) => r.is_locked);
+    return first?.nav_date ?? '';
+  });
   const [amountUsd, setAmountUsd] = useState('500');
   const [submitting, setSubmitting] = useState(false);
 
@@ -184,7 +194,13 @@ export default function Page({ shares, balances, funds, clients, error }: Props)
             </select>
           </FormField>
           <FormField label={t('transactionDate')}>
-            <input style={styles.input} type='date' value={txDate} onChange={(event) => setTxDate(event.target.value)} disabled={submitting} />
+            {lockedNavDates.length > 0 ? (
+              <select style={styles.input} value={txDate} onChange={(event) => setTxDate(event.target.value)} disabled={submitting}>
+                {lockedNavDates.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            ) : (
+              <div style={{ color: colors.danger, fontSize: 13 }}>No locked NAV dates for this fund. Calculate and lock a NAV first.</div>
+            )}
           </FormField>
           <FormField label={t('amountUsd')}>
             <input style={styles.input} type='number' min='0' step='0.01' value={amountUsd} onChange={(event) => setAmountUsd(event.target.value)} disabled={submitting} />
@@ -212,8 +228,8 @@ export async function getServerSideProps(context: any) {
   }
 
   try {
-    const [shares, balances, fundData, clientData] = await Promise.all([getShareHistory({ accessToken: auth.accessToken }), getShareBalances({ accessToken: auth.accessToken }), getFunds(1, 50, auth.accessToken), getClients({ accessToken: auth.accessToken })]);
-    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, shares, balances, funds: fundData.items ?? [], clients: clientData.items ?? [] } };
+    const [shares, balances, fundData, clientData, navRecords] = await Promise.all([getShareHistory({ accessToken: auth.accessToken }), getShareBalances({ accessToken: auth.accessToken }), getFunds(1, 50, auth.accessToken), getClients({ accessToken: auth.accessToken }), getNav(undefined, auth.accessToken)]);
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, shares, balances, funds: fundData.items ?? [], clients: clientData.items ?? [], navRecords: navRecords ?? [] } };
   } catch (error) {
     return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, shares: [], balances: [], funds: [], clients: [], error: error instanceof Error ? error.message : 'unknown error' } };
   }

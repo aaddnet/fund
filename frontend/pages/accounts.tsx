@@ -67,7 +67,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
     if (!canWrite) return;
     setSubmitting(true);
     try {
-      await createAccount({ fund_id: Number(fundId), client_id: Number(clientId), broker, account_no: accountNo });
+      await createAccount({ fund_id: Number(fundId), client_id: clientId ? Number(clientId) : undefined, broker, account_no: accountNo });
       showToast('Account created successfully', 'success');
       window.location.reload();
     } catch (err) {
@@ -81,7 +81,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
     if (!canWrite || !editingAccount) return;
     setSubmitting(true);
     try {
-      await updateAccount(editingAccount.id, { fund_id: Number(fundId), client_id: Number(clientId), broker, account_no: accountNo });
+      await updateAccount(editingAccount.id, { fund_id: Number(fundId), client_id: clientId ? Number(clientId) : null, broker, account_no: accountNo });
       showToast('Account updated successfully', 'success');
       window.location.reload();
     } catch (err) {
@@ -186,9 +186,9 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
               {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
           </FormField>
-          <FormField label="Client">
-            <select required style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
-              <option value="">Select Client</option>
+          <FormField label="Client (optional)">
+            <select style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
+              <option value="">— No client —</option>
               {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </FormField>
@@ -215,9 +215,9 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
               {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
           </FormField>
-          <FormField label="Client">
-            <select required style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
-              <option value="">Select Client</option>
+          <FormField label="Client (optional)">
+            <select style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
+              <option value="">— No client —</option>
               {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </FormField>
