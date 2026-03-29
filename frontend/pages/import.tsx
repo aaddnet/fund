@@ -102,27 +102,12 @@ export default function Page({ batches, error }: Props) {
         )}
       </div>
 
-      <div style={styles.grid2}>
-        <div style={{...styles.card, gridColumn: '1 / -1'}}>
-          <h3 style={{ marginTop: 0 }}>{t('csvFormat')}</h3>
-              <input style={styles.input} type='file' accept='.csv,text/csv' onChange={(event) => setFile(event.target.files?.[0] ?? null)} disabled={!canWriteImport} />
-            </FormField>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <button style={styles.buttonPrimary} disabled={submitting || !canWriteImport} type='submit'>
-                {submitting ? t('uploading') : t('uploadAndParse')}
-              </button>
-              {!canWriteImport ? <span style={{ color: colors.warning }}>{t('readOnlyView')}</span> : null}
-              {submitState ? <span style={{ color: submitState.toLowerCase().includes('failed') || submitState.toLowerCase().includes('error') || submitState.includes('失败') ? colors.danger : colors.success }}>{submitState}</span> : null}
-            </div>
-          </form>
-        </div>
-        <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>{t('csvFormat')}</h3>
-          <p style={{ marginTop: 0, color: colors.muted }}>{t('requiredColumns')}</p>
-          <code>trade_date, asset_code, quantity, price, currency, tx_type</code>
-          <p style={{ color: colors.muted }}>{t('optionalColumns')}</p>
-          <p style={{ marginBottom: 0, color: colors.muted }}>{t('confirmHint')}</p>
-        </div>
+      <div style={styles.card}>
+        <h3 style={{ marginTop: 0 }}>{t('csvFormat')}</h3>
+        <p style={{ marginTop: 0, color: colors.muted }}>{t('requiredColumns')}</p>
+        <code>trade_date, asset_code, quantity, price, currency, tx_type</code>
+        <p style={{ color: colors.muted }}>{t('optionalColumns')}</p>
+        <p style={{ marginBottom: 0, color: colors.muted }}>{t('confirmHint')}</p>
       </div>
 
       <div style={{ ...styles.card, marginTop: 16 }}>
