@@ -456,11 +456,11 @@ export async function getFunds(page = 1, size = 50, accessToken?: string | null)
 }
 
 export async function createFund(data: { name: string; base_currency?: string }) {
-  return fetchJson<Fund>('/fund', { method: 'POST', body: data });
+  return fetchJson<Fund>('/fund', { method: 'POST', body: JSON.stringify(data) });
 }
 
 export async function updateFund(fundId: number, data: { name?: string; base_currency?: string }) {
-  return fetchJson<Fund>(`/fund/${fundId}`, { method: 'PATCH', body: data });
+  return fetchJson<Fund>(`/fund/${fundId}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 
 export async function getClients(params?: { page?: number; size?: number; fundId?: number; q?: string; accessToken?: string | null }) {
@@ -559,6 +559,30 @@ export async function updateAccount(accountId: number, payload: { fund_id?: numb
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+}
+
+export async function listAuthUsers(accessToken?: string | null) {
+  return fetchJson<AuthUser[]>('/auth/users', { accessToken });
+}
+
+export async function createAuthUser(data: { username: string; password: string; role: string; display_name?: string | null; client_scope_id?: number | null; is_active?: boolean }) {
+  return fetchJson<AuthUser>('/auth/users', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateAuthUser(userId: number, data: { role?: string | null; display_name?: string | null; client_scope_id?: number | null; is_active?: boolean | null }) {
+  return fetchJson<AuthUser>(`/auth/users/${userId}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function resetAuthUserPassword(userId: number, newPassword: string) {
+  return fetchJson<AuthUser>(`/auth/users/${userId}/reset-password`, { method: 'POST', body: JSON.stringify({ new_password: newPassword }) });
+}
+
+export async function unlockAuthUser(userId: number) {
+  return fetchJson<{ id: number; username: string; locked_until: null; failed_login_attempts: number }>(`/auth/users/${userId}/unlock`, { method: 'POST' });
+}
+
+export async function changeMyPassword(data: { current_password: string; new_password: string }) {
+  return fetchJson<AuthUser>('/auth/me/password', { method: 'PATCH', body: JSON.stringify(data) });
 }
 
 export { API_BASE, PUBLIC_API_BASE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, LOCALE_COOKIE, buildQuery, fetchJson };

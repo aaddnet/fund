@@ -46,6 +46,7 @@ from app.services.auth import (
     require_permissions,
     require_roles,
     revoke_session,
+    unlock_user,
     update_auth_user,
     permissions_for_role,
 )
@@ -114,6 +115,58 @@ def auth_logout(response: Response, actor: Actor = Depends(get_actor), db: Sessi
     return response
 
 
+@router.get("/auth/users")
+def list_users(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    return [_serialize_auth_user(u) for u in list_auth_users(db)]
+
+
+@router.post("/auth/users", status_code=201)
+def create_user(req: AuthUserCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    user = create_auth_user(
+        db,
+        username=req.username,
+        password=req.password,
+        role=req.role,
+        client_scope_id=req.client_scope_id,
+        display_name=req.display_name,
+        is_active=req.is_active,
+    )
+    return _serialize_auth_user(user)
+
+
+@router.patch("/auth/users/{user_id}")
+def update_user(user_id: int, req: AuthUserUpdateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    user = update_auth_user(
+        db,
+        user_id=user_id,
+        role=req.role,
+        client_scope_id=req.client_scope_id,
+        display_name=req.display_name,
+        is_active=req.is_active,
+    )
+    return _serialize_auth_user(user)
+
+
+@router.post("/auth/users/{user_id}/reset-password")
+def reset_user_password(user_id: int, req: AuthPasswordResetRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    user = admin_reset_password(db, user_id=user_id, new_password=req.new_password)
+    return _serialize_auth_user(user)
+
+
+@router.post("/auth/users/{user_id}/unlock")
+def unlock_user_route(user_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "auth.manage")
+    return unlock_user(db, user_id)
+
+
+@router.patch("/auth/me/password")
+def change_my_password(req: AuthPasswordChangeRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    user = change_password(db, actor=actor, current_password=req.current_password, new_password=req.new_password)
+    return _serialize_auth_user(user)
 
 
 @router.post("/rates/fetch")

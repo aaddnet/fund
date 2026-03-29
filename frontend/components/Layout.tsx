@@ -33,6 +33,7 @@ export default function Layout({ title, children, subtitle, requiredPermission }
       label: t('customerView'),
       requiredPermission: 'customer.read' },
     { href: '/import', label: t('import'), requiredPermission: 'import.read' },
+    { href: '/settings', label: t('settings'), requiredPermission: 'nav.read' },
   ];
   const visibleNavItems = navItems.filter((item) => !item.requiredPermission || hasPermission(item.requiredPermission));
   const showPermissionBanner = requiredPermission && !hasPermission(requiredPermission);
