@@ -263,15 +263,18 @@ def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> lis
         else:
             sell_quantity = abs(quantity)
             current_quantity = state["quantity"]
-            if current_quantity <= 0 or sell_quantity > current_quantity:
-                raise ValueError(f"Row {item['row_number']}: sell quantity exceeds current position for {item['asset_code']}")
-            
-            average_cost = (state["cost_basis"] / current_quantity) if current_quantity != 0 else Decimal("0")
-            state["quantity"] = current_quantity - sell_quantity
-            state["cost_basis"] = state["cost_basis"] - (average_cost * sell_quantity)
-            if fee:
-                state["cost_basis"] += fee
-            if state["quantity"] == 0:
+            if current_quantity > 0 and sell_quantity <= current_quantity:
+                average_cost = state["cost_basis"] / current_quantity
+                state["quantity"] = current_quantity - sell_quantity
+                state["cost_basis"] = state["cost_basis"] - (average_cost * sell_quantity)
+                if fee:
+                    state["cost_basis"] += fee
+                if state["quantity"] == 0:
+                    state["cost_basis"] = Decimal("0")
+            else:
+                # Partial-period import: position existed before this file.
+                # Allow negative quantity (will be excluded from final positions).
+                state["quantity"] = current_quantity - sell_quantity
                 state["cost_basis"] = Decimal("0")
 
         snapshots[(item["snapshot_date"], item["asset_code"], item["currency"])] = {
