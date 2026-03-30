@@ -300,8 +300,8 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
                 placeholder={t('initStep3SharesHint')}
                 disabled={seedSaving}
               />
-              <div style={{ fontSize: 11, color: colors.muted, marginTop: 4 }}>{t('initStep3SharesHint')}</div>
             </FormField>
+            <div style={{ fontSize: 11, color: colors.muted, marginTop: -8 }}>{t('initStep3SharesHint')}</div>
           </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
             <button style={styles.buttonSecondary} onClick={() => setStep(2)} disabled={seedSaving}>{t('prevStep')}</button>
