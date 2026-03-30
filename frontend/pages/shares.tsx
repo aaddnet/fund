@@ -53,10 +53,11 @@ export default function Page({ shares, balances, funds, clients, navRecords = []
   const [mode, setMode] = useState<FormMode>('subscribe');
   const [fundId, setFundId] = useState(defaultFundId);
   const [clientId, setClientId] = useState(defaultClientId);
-  const lockedNavDates = useMemo(
-    () => navRecords.filter((r) => r.is_locked && String(r.fund_id) === fundId).map((r) => r.nav_date).sort().reverse(),
+  const lockedNavRecordsForFund = useMemo(
+    () => navRecords.filter((r) => r.is_locked && String(r.fund_id) === fundId && r.nav_per_share > 0).sort((a, b) => b.nav_date.localeCompare(a.nav_date)),
     [navRecords, fundId],
   );
+  const lockedNavDates = useMemo(() => lockedNavRecordsForFund.map((r) => r.nav_date), [lockedNavRecordsForFund]);
   const [txDate, setTxDate] = useState(() => {
     const first = navRecords.find((r) => r.is_locked);
     return first?.nav_date ?? '';
@@ -283,12 +284,12 @@ export default function Page({ shares, balances, funds, clients, navRecords = []
             </select>
           </FormField>
           <FormField label={t('transactionDate')}>
-            {lockedNavDates.length > 0 ? (
+            {lockedNavRecordsForFund.length > 0 ? (
               <select style={styles.input} value={txDate} onChange={(event) => setTxDate(event.target.value)} disabled={submitting}>
-                {lockedNavDates.map((d) => <option key={d} value={d}>{d}</option>)}
+                {lockedNavRecordsForFund.map((r) => <option key={r.nav_date} value={r.nav_date}>{r.nav_date} (NAV: {formatNumber(r.nav_per_share)})</option>)}
               </select>
             ) : (
-              <div style={{ color: colors.danger, fontSize: 13 }}>No locked NAV dates for this fund. Calculate and lock a NAV first.</div>
+              <div style={{ color: colors.danger, fontSize: 13 }}>{t('noLockedNavDates')}</div>
             )}
           </FormField>
           <FormField label={t('amountUsd')}>

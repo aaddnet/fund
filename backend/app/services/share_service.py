@@ -25,12 +25,12 @@ def _require_positive_amount(amount_usd: Decimal) -> Decimal:
 def _require_locked_nav(db: Session, fund_id: int, tx_date):
     nav = db.query(NAVRecord).filter_by(fund_id=fund_id, nav_date=tx_date).first()
     if not nav:
-        raise ValueError("missing nav_at_date")
+        raise ValueError(f"No NAV record found for fund {fund_id} on {tx_date}. Please calculate NAV for this date first.")
     if not nav.is_locked:
-        raise ValueError("share transaction requires a locked nav record")
+        raise ValueError(f"NAV record on {tx_date} is not locked. Share transactions require a locked NAV.")
     nav_per_share = Decimal(str(nav.nav_per_share or 0))
     if nav_per_share <= ZERO:
-        raise ValueError("nav_at_date must be greater than 0")
+        raise ValueError(f"NAV per share on {tx_date} is 0. Please import positions/cash and recalculate NAV before subscribing.")
     return nav
 
 
