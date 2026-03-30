@@ -154,7 +154,9 @@ export default function Page({ report, funds, clients, filters, error }: Props) 
                 <option value='redeem'>Redeem</option>
               </select>
             </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+              <button type='submit' style={styles.buttonPrimary}>{t('runReport')}</button>
+              <a href='/reports' style={{ ...styles.buttonSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>{t('reset')}</a>
             </div>
           </form>
         </div>

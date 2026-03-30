@@ -513,7 +513,7 @@ def seed_fund_capital(fund_id: int, req: SeedCapitalRequest, db: Session = Depen
     if not client:
         raise HTTPException(status_code=404, detail="Client not found.")
     seed_nav = Decimal("1.000000")
-    shares_issued = req.amount_usd / seed_nav
+    shares_issued = Decimal(str(req.shares_override)) if req.shares_override else req.amount_usd / seed_nav
     tx = _ShareTx(
         fund_id=fund_id,
         client_id=req.client_id,

@@ -45,6 +45,7 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
   const [seedClientId, setSeedClientId] = useState('');
   const [seedAmount, setSeedAmount] = useState('');
   const [seedDate, setSeedDate] = useState('');
+  const [seedSharesOverride, setSeedSharesOverride] = useState('');
   const [seedSaving, setSeedSaving] = useState(false);
   const [seedResult, setSeedResult] = useState<{ shares_issued: number } | null>(null);
 
@@ -54,16 +55,33 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
 
   const selectedFund = funds.find(f => String(f.id) === selectedFundId);
 
+  // Pre-fill config fields when fund selected
+  function onFundSelect(id: string) {
+    setSelectedFundId(id);
+    const f = funds.find(ff => String(ff.id) === id);
+    if (f) {
+      setFundCode(f.fund_code || '');
+      setFundType(f.fund_type || 'private_equity');
+      setHurdleRate(f.hurdle_rate != null ? String(f.hurdle_rate) : '');
+      setPerfFeeRate(f.perf_fee_rate != null ? String(f.perf_fee_rate) : '');
+      setPerfFeeFrequency(f.perf_fee_frequency || 'annual');
+      setSubscriptionCycle(f.subscription_cycle || 'quarterly');
+      setNavDecimal(String(f.nav_decimal ?? 6));
+      setShareDecimal(String(f.share_decimal ?? 6));
+      setDescription(f.description || '');
+    }
+  }
+
   async function handleCreateFund() {
     if (!newFundName.trim()) return;
     setFundCreating(true);
     try {
       const created = await createFund({ name: newFundName.trim(), base_currency: newFundCurrency });
       setFunds(prev => [...prev, created]);
-      setSelectedFundId(String(created.id));
+      onFundSelect(String(created.id));
       setIsCreatingFund(false);
       setNewFundName('');
-      showToast(`Fund "${created.name}" created.`, 'success');
+      showToast(`"${created.name}" ${t('userCreated').replace('User', t('fund'))}`, 'success');
     } catch (err: any) {
       showToast(err.message || 'Failed to create fund.', 'error');
     } finally {
@@ -100,11 +118,15 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
     if (!selectedFundId || !seedClientId || !seedAmount || !seedDate) return;
     setSeedSaving(true);
     try {
-      const result = await createSeedCapital(Number(selectedFundId), {
+      const payload: { client_id: number; amount_usd: number; seed_date: string; shares_override?: number } = {
         client_id: Number(seedClientId),
         amount_usd: Number(seedAmount),
         seed_date: seedDate,
-      });
+      };
+      if (seedSharesOverride) {
+        (payload as any).shares_override = Number(seedSharesOverride);
+      }
+      const result = await createSeedCapital(Number(selectedFundId), payload);
       setSeedResult(result);
       showToast(t('seedSuccess', { shares: result.shares_issued.toFixed(6) }), 'success');
       setStep(4);
@@ -161,31 +183,31 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
       {/* Step 1: Select / Create Fund */}
       {step === 1 && (
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Step 1 — Select or Create a Fund</h3>
+          <h3 style={{ marginTop: 0 }}>{t('initStep1Title')}</h3>
           <FormField label={t('selectFund')}>
-            <select style={styles.input} value={selectedFundId} onChange={e => setSelectedFundId(e.target.value)}>
-              <option value="">— Select existing fund —</option>
-              {funds.map(f => <option key={f.id} value={f.id}>{f.name} ({f.status || 'draft'})</option>)}
+            <select style={styles.input} value={selectedFundId} onChange={e => onFundSelect(e.target.value)}>
+              <option value="">{t('initStep1SelectPlaceholder')}</option>
+              {funds.map(f => <option key={f.id} value={f.id}>{f.name} ({t(f.status as any || 'draft')})</option>)}
             </select>
           </FormField>
-          <div style={{ margin: '12px 0', color: colors.muted, fontSize: 13 }}>— or —</div>
+          <div style={{ margin: '12px 0', color: colors.muted, fontSize: 13 }}>{t('initStep1Or')}</div>
           {isCreatingFund ? (
             <div style={{ display: 'grid', gap: 10 }}>
-              <FormField label="Fund Name">
+              <FormField label={t('initStep1FundName')}>
                 <input style={styles.input} value={newFundName} onChange={e => setNewFundName(e.target.value)} disabled={fundCreating} />
               </FormField>
-              <FormField label="Base Currency">
+              <FormField label={t('initStep1BaseCurrency')}>
                 <input style={styles.input} value={newFundCurrency} onChange={e => setNewFundCurrency(e.target.value.toUpperCase())} maxLength={10} disabled={fundCreating} />
               </FormField>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={styles.buttonPrimary} onClick={handleCreateFund} disabled={fundCreating || !newFundName.trim()}>
-                  {fundCreating ? 'Creating...' : 'Create Fund'}
+                  {fundCreating ? t('creating') : t('initStep1CreateBtn')}
                 </button>
-                <button style={styles.buttonSecondary} onClick={() => setIsCreatingFund(false)} disabled={fundCreating}>Cancel</button>
+                <button style={styles.buttonSecondary} onClick={() => setIsCreatingFund(false)} disabled={fundCreating}>{t('cancel')}</button>
               </div>
             </div>
           ) : (
-            <button style={styles.buttonSecondary} onClick={() => setIsCreatingFund(true)}>+ Create New Fund</button>
+            <button style={styles.buttonSecondary} onClick={() => setIsCreatingFund(true)}>{t('initStep1CreateNew')}</button>
           )}
           <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
             <button style={styles.buttonPrimary} disabled={!selectedFundId} onClick={() => setStep(2)}>{t('nextStep')} →</button>
@@ -196,8 +218,8 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
       {/* Step 2: Configure Fund Parameters */}
       {step === 2 && (
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Step 2 — Configure Fund Parameters</h3>
-          <p style={{ color: colors.muted, fontSize: 13 }}>Fund: <strong>{selectedFund?.name}</strong></p>
+          <h3 style={{ marginTop: 0 }}>{t('initStep2Title')}</h3>
+          <p style={{ color: colors.muted, fontSize: 13 }}>{t('initStep2FundLabel')}: <strong>{selectedFund?.name}</strong></p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <FormField label={t('fundCode')}>
               <input style={styles.input} value={fundCode} onChange={e => setFundCode(e.target.value)} disabled={configSaving} />
@@ -209,22 +231,22 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
               </select>
             </FormField>
             <FormField label={`${t('hurdleRate')} (%)`}>
-              <input type="number" step="any" style={styles.input} value={hurdleRate} onChange={e => setHurdleRate(e.target.value)} placeholder="e.g. 8" disabled={configSaving} />
+              <input type="number" step="any" style={styles.input} value={hurdleRate} onChange={e => setHurdleRate(e.target.value)} placeholder="8" disabled={configSaving} />
             </FormField>
             <FormField label={`${t('perfFeeRate')} (%)`}>
-              <input type="number" step="any" style={styles.input} value={perfFeeRate} onChange={e => setPerfFeeRate(e.target.value)} placeholder="e.g. 20" disabled={configSaving} />
+              <input type="number" step="any" style={styles.input} value={perfFeeRate} onChange={e => setPerfFeeRate(e.target.value)} placeholder="20" disabled={configSaving} />
             </FormField>
             <FormField label={t('perfFeeFrequency')}>
               <select style={styles.input} value={perfFeeFrequency} onChange={e => setPerfFeeFrequency(e.target.value)} disabled={configSaving}>
-                <option value="annual">Annual</option>
-                <option value="quarterly">Quarterly</option>
+                <option value="annual">{t('annual')}</option>
+                <option value="quarterly">{t('quarterly')}</option>
               </select>
             </FormField>
             <FormField label={t('subscriptionCycle')}>
               <select style={styles.input} value={subscriptionCycle} onChange={e => setSubscriptionCycle(e.target.value)} disabled={configSaving}>
-                <option value="quarterly">Quarterly</option>
-                <option value="monthly">Monthly</option>
-                <option value="annual">Annual</option>
+                <option value="quarterly">{t('quarterly')}</option>
+                <option value="monthly">{t('monthly')}</option>
+                <option value="annual">{t('annual')}</option>
               </select>
             </FormField>
             <FormField label={t('navDecimal')}>
@@ -240,7 +262,7 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
             <button style={styles.buttonSecondary} onClick={() => setStep(1)} disabled={configSaving}>{t('prevStep')}</button>
             <button style={styles.buttonPrimary} onClick={handleSaveConfig} disabled={configSaving}>
-              {configSaving ? 'Saving...' : `Save & ${t('nextStep')}`}
+              {configSaving ? t('saving') : t('saveAndNext')}
             </button>
           </div>
         </div>
@@ -249,46 +271,57 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
       {/* Step 3: Seed Capital */}
       {step === 3 && (
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Step 3 — Record Seed Capital</h3>
-          <p style={{ color: colors.muted, fontSize: 13 }}>Fund: <strong>{selectedFund?.name}</strong> · Initial NAV = 1.000000</p>
+          <h3 style={{ marginTop: 0 }}>{t('initStep3Title')}</h3>
+          <p style={{ color: colors.muted, fontSize: 13 }}>{t('initStep2FundLabel')}: <strong>{selectedFund?.name}</strong> · {t('initStep3NavNote')}</p>
           {seedResult && (
             <div style={{ background: '#d1fae5', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
-              ✓ {seedResult.shares_issued.toFixed(6)} shares issued at NAV 1.000000
+              ✓ {t('initStep3SharesIssued', { shares: seedResult.shares_issued.toFixed(6) })}
             </div>
           )}
           <div style={{ display: 'grid', gap: 12 }}>
             <FormField label={t('client')}>
               <select style={styles.input} value={seedClientId} onChange={e => setSeedClientId(e.target.value)} disabled={seedSaving}>
-                <option value="">Select Client</option>
+                <option value="">— {t('allClients')} —</option>
                 {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </FormField>
             <FormField label={`${t('amountUsd')} (USD)`}>
-              <input type="number" step="any" style={styles.input} value={seedAmount} onChange={e => setSeedAmount(e.target.value)} placeholder="e.g. 1000000" disabled={seedSaving} />
+              <input type="number" step="any" style={styles.input} value={seedAmount} onChange={e => setSeedAmount(e.target.value)} placeholder="1000000" disabled={seedSaving} />
             </FormField>
-            <FormField label="Seed Date">
+            <FormField label={t('initStep3SeedDate')}>
               <input type="date" style={styles.input} value={seedDate} onChange={e => setSeedDate(e.target.value)} disabled={seedSaving} />
+            </FormField>
+            <FormField label={t('initStep3SharesLabel')}>
+              <input
+                type="number" step="any"
+                style={styles.input}
+                value={seedSharesOverride}
+                onChange={e => setSeedSharesOverride(e.target.value)}
+                placeholder={t('initStep3SharesHint')}
+                disabled={seedSaving}
+              />
+              <div style={{ fontSize: 11, color: colors.muted, marginTop: 4 }}>{t('initStep3SharesHint')}</div>
             </FormField>
           </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
             <button style={styles.buttonSecondary} onClick={() => setStep(2)} disabled={seedSaving}>{t('prevStep')}</button>
-            <button style={styles.buttonSecondary} onClick={() => setStep(4)} disabled={seedSaving}>Skip</button>
+            <button style={styles.buttonSecondary} onClick={() => setStep(4)} disabled={seedSaving}>{t('skipStep')}</button>
             <button style={styles.buttonPrimary} onClick={handleSeedCapital} disabled={seedSaving || !seedClientId || !seedAmount || !seedDate}>
-              {seedSaving ? 'Recording...' : `Record ${t('seedCapital')}`}
+              {seedSaving ? t('recording') : t('recordSeedCapital')}
             </button>
           </div>
         </div>
       )}
 
-      {/* Steps 4-6: Guidance */}
+      {/* Step 4: Account Setup guidance */}
       {step === 4 && (
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Step 4 — Account Setup</h3>
-          <p>Ensure all brokerage accounts are created and linked to this fund:</p>
+          <h3 style={{ marginTop: 0 }}>{t('initStep4Title')}</h3>
+          <p>{t('initStep4Body')}</p>
           <ol style={{ color: colors.muted, fontSize: 14, lineHeight: 1.8 }}>
-            <li>Go to <strong>Accounts</strong> → Create Account → select this fund, choose broker, enter account number.</li>
-            <li>Link each account to the appropriate client.</li>
-            <li>Accounts are used to scope positions and transactions for NAV calculation.</li>
+            <li>{t('initStep4Bullet1')}</li>
+            <li>{t('initStep4Bullet2')}</li>
+            <li>{t('initStep4Bullet3')}</li>
           </ol>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
             <button style={styles.buttonSecondary} onClick={() => setStep(3)}>{t('prevStep')}</button>
@@ -297,14 +330,15 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
         </div>
       )}
 
+      {/* Step 5: Cash Positions guidance */}
       {step === 5 && (
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Step 5 — Cash Positions</h3>
-          <p>Record cash balances held in each account on the NAV date:</p>
+          <h3 style={{ marginTop: 0 }}>{t('initStep5Title')}</h3>
+          <p>{t('initStep5Body')}</p>
           <ol style={{ color: colors.muted, fontSize: 14, lineHeight: 1.8 }}>
-            <li>Go to <strong>Cash</strong> page → Add Cash Position.</li>
-            <li>Select the account, currency, amount, and snapshot date (must match the NAV date you intend to calculate).</li>
-            <li>Cash balances are automatically included when calculating NAV for that date.</li>
+            <li>{t('initStep5Bullet1')}</li>
+            <li>{t('initStep5Bullet2')}</li>
+            <li>{t('initStep5Bullet3')}</li>
           </ol>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
             <button style={styles.buttonSecondary} onClick={() => setStep(4)}>{t('prevStep')}</button>
@@ -313,15 +347,16 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
         </div>
       )}
 
+      {/* Step 6: NAV Calculation guidance */}
       {step === 6 && (
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Step 6 — NAV Calculation</h3>
-          <p>Calculate the first official NAV for this fund:</p>
+          <h3 style={{ marginTop: 0 }}>{t('initStep6Title')}</h3>
+          <p>{t('initStep6Body')}</p>
           <ol style={{ color: colors.muted, fontSize: 14, lineHeight: 1.8 }}>
-            <li>Import position snapshots via <strong>Import</strong> → select account + date → upload CSV.</li>
-            <li>Ensure asset prices and FX rates exist for the target date (use Scheduler or manual entry).</li>
-            <li>Go to <strong>NAV</strong> → Calculate NAV → select this fund and the NAV date.</li>
-            <li>Review the calculated total assets and NAV per share.</li>
+            <li>{t('initStep6Bullet1')}</li>
+            <li>{t('initStep6Bullet2')}</li>
+            <li>{t('initStep6Bullet3')}</li>
+            <li>{t('initStep6Bullet4')}</li>
           </ol>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
             <button style={styles.buttonSecondary} onClick={() => setStep(5)}>{t('prevStep')}</button>
@@ -333,24 +368,27 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
       {/* Step 7: Activate Fund */}
       {step === 7 && (
         <div style={styles.card}>
-          <h3 style={{ marginTop: 0 }}>Step 7 — Activate Fund</h3>
-          <p style={{ color: colors.muted, fontSize: 13 }}>Fund: <strong>{selectedFund?.name}</strong> · Current status: <strong>{selectedFund?.status || 'draft'}</strong></p>
-          {activated || selectedFund?.status === 'active' ? (
+          <h3 style={{ marginTop: 0 }}>{t('initStep7Title')}</h3>
+          <p style={{ color: colors.muted, fontSize: 13 }}>
+            {t('initStep2FundLabel')}: <strong>{selectedFund?.name}</strong> ·
+            {' '}{t('initStep7CurrentStatus')}: <strong>{t((selectedFund?.status || 'draft') as any)}</strong>
+          </p>
+          {(activated || selectedFund?.status === 'active') ? (
             <div style={{ background: '#d1fae5', borderRadius: 8, padding: '12px 16px', fontSize: 14 }}>
-              ✓ Fund is <strong>active</strong>. Initialization complete!
+              ✓ {t('initStep7ActiveMsg')}
             </div>
           ) : (
             <>
-              <p>Once all setup steps are complete, activate the fund to mark it as operational.</p>
+              <p>{t('initStep7Body')}</p>
               <ul style={{ color: colors.muted, fontSize: 14, lineHeight: 1.8 }}>
-                <li>Status changes from <em>draft</em> → <em>active</em></li>
-                <li>Inception date will be set to today if not already configured</li>
-                <li>Fund will appear in operational dashboards</li>
+                <li>{t('initStep7Bullet1')}</li>
+                <li>{t('initStep7Bullet2')}</li>
+                <li>{t('initStep7Bullet3')}</li>
               </ul>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
                 <button style={styles.buttonSecondary} onClick={() => setStep(6)} disabled={activating}>{t('prevStep')}</button>
                 <button style={styles.buttonPrimary} onClick={handleActivate} disabled={activating}>
-                  {activating ? 'Activating...' : t('activateFund')}
+                  {activating ? t('activating') : t('activateFund')}
                 </button>
               </div>
             </>

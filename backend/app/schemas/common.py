@@ -88,6 +88,7 @@ class SeedCapitalRequest(BaseModel):
     client_id: int
     amount_usd: Decimal
     seed_date: date
+    shares_override: Optional[Decimal] = None  # if set, use this instead of amount ÷ 1.0
 
 class CashPositionUpsertRequest(BaseModel):
     account_id: int
