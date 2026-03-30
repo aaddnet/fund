@@ -122,7 +122,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
               </select>
             </div>
             <div>
-              <label style={styles.label}>{t('client')}</label>
+              <label style={styles.label}>{t('accountHolder')}</label>
               <select name='clientId' defaultValue={filters.clientId} style={styles.input}>
                 <option value=''>{t('allClients')}</option>
                 {clients.map((client) => (
@@ -132,7 +132,10 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
             </div>
             <div>
               <label style={styles.label}>{t('brokerContains')}</label>
-              <input name='broker' defaultValue={filters.broker} style={styles.input} placeholder='IB / HK Broker / ...' />
+              <select name='broker' defaultValue={filters.broker} style={styles.input}>
+                <option value=''>— All Brokers —</option>
+                {BROKERS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </select>
             </div>
             <div>
               <label style={styles.label}>{t('accountSearch')}</label>
@@ -165,7 +168,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
           columns={[
             { key: 'id', title: t('accountId'), render: (item) => item.id },
             { key: 'fund', title: t('fund'), render: (item) => item.fund_name || `Fund #${item.fund_id}` },
-            { key: 'client', title: t('client'), render: (item) => item.client_name || (item.client_id ? `Client #${item.client_id}` : t('notAvailable')) },
+            { key: 'client', title: t('accountHolder'), render: (item) => item.client_name || (item.client_id ? `#${item.client_id}` : t('notAvailable')) },
             { key: 'broker', title: 'Broker', render: (item) => item.broker },
             { key: 'account', title: 'Account No', render: (item) => item.account_no },
             { key: 'positions', title: t('currentPositions'), render: (item) => item.position_count },
@@ -195,7 +198,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
               {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
           </FormField>
-          <FormField label="Client (optional)">
+          <FormField label={`${t('accountHolder')} (optional)`}>
             <select style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
               <option value="">— No client —</option>
               {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -227,7 +230,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
               {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
           </FormField>
-          <FormField label="Client (optional)">
+          <FormField label={`${t('accountHolder')} (optional)`}>
             <select style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
               <option value="">— No client —</option>
               {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}

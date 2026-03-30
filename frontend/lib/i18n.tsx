@@ -270,6 +270,8 @@ const messages = {
     draft: 'Draft',
     active: 'Active',
     closed: 'Closed',
+    totalMarketValue: 'Total Market Value (USD)',
+    accountHolder: 'Account Holder',
     // Initialize wizard step labels and content
     initStep1Title: 'Step 1 — Select or Create a Fund',
     initStep1SelectPlaceholder: '— Select existing fund —',
@@ -638,6 +640,8 @@ const messages = {
     saving: '保存中...',
     recording: '录入中...',
     activating: '激活中...',
+    totalMarketValue: '总市值 (USD)',
+    accountHolder: '账户持有人',
   },
 } as const;
 

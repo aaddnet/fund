@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import FormField from '../components/FormField';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { Fund, getFunds, createFund, updateFund } from '../lib/api';
+import { Fund, NavRecord, getFunds, getNav, createFund, updateFund } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { requirePageAuth } from '../lib/pageAuth';
@@ -13,12 +13,13 @@ import { colors, formatNumber, styles } from '../lib/ui';
 type Props = {
   rows: Fund[];
   total: number;
+  navRecords: NavRecord[];
   error?: string;
 };
 
 const CURRENCIES = ['USD', 'HKD', 'EUR', 'GBP', 'SGD', 'CNY', 'JPY'];
 
-export default function Page({ rows, total, error }: Props) {
+export default function Page({ rows, total, navRecords, error }: Props) {
   const { t } = useI18n();
   const { hasPermission } = useAuth();
   const { showToast } = useToast();
@@ -29,6 +30,18 @@ export default function Page({ rows, total, error }: Props) {
   const [name, setName] = useState('');
   const [baseCurrency, setBaseCurrency] = useState('USD');
   const [submitting, setSubmitting] = useState(false);
+
+  // Latest locked NAV per fund: fund_id → NavRecord
+  const latestNavByFund = useMemo(() => {
+    const map: Record<number, NavRecord> = {};
+    [...navRecords]
+      .filter(r => r.is_locked)
+      .sort((a, b) => b.nav_date.localeCompare(a.nav_date))
+      .forEach(r => {
+        if (!(r.fund_id in map)) map[r.fund_id] = r;
+      });
+    return map;
+  }, [navRecords]);
 
   function openCreate() {
     setName('');
@@ -75,13 +88,16 @@ export default function Page({ rows, total, error }: Props) {
     }
   }
 
+  const fmtUsd = (n: number) =>
+    n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
   return (
-    <Layout title='Funds' subtitle='Manage investment funds' requiredPermission='nav.read'>
+    <Layout title={t('funds')} subtitle='Manage investment funds' requiredPermission='nav.read'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>{t('backendWarning')}: {error}</div> : null}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div style={{ color: colors.muted, fontSize: 14 }}>
-          {total} fund{total !== 1 ? 's' : ''} registered
+          {total} {t('funds').toLowerCase()} registered
         </div>
         {canWrite && (
           <button style={styles.buttonPrimary} onClick={openCreate}>+ Create Fund</button>
@@ -97,7 +113,31 @@ export default function Page({ rows, total, error }: Props) {
             { key: 'id', title: 'Fund ID', render: (item) => `#${item.id}` },
             { key: 'name', title: 'Name', render: (item) => <strong>{item.name}</strong> },
             { key: 'currency', title: 'Base Currency', render: (item) => item.base_currency },
-            { key: 'shares', title: 'Total Shares', render: (item) => formatNumber(item.total_shares ?? 0, 6) },
+            { key: 'status', title: t('fundStatus'), render: (item) => {
+              const s = item.status || 'draft';
+              const color = s === 'active' ? '#16a34a' : s === 'closed' ? '#6b7280' : '#d97706';
+              return <span style={{ color, fontWeight: 600, fontSize: 12 }}>{t(s as any)}</span>;
+            }},
+            { key: 'shares', title: t('sharesLabel'), render: (item) => formatNumber(item.total_shares ?? 0, 6) },
+            { key: 'navPerShare', title: t('navPerShare'), render: (item) => {
+              const nav = latestNavByFund[item.id];
+              if (!nav) return <span style={{ color: colors.muted }}>—</span>;
+              return (
+                <span title={`NAV date: ${nav.nav_date}`}>
+                  {formatNumber(nav.nav_per_share, 6)}
+                </span>
+              );
+            }},
+            { key: 'totalValue', title: t('totalMarketValue'), render: (item) => {
+              const nav = latestNavByFund[item.id];
+              if (!nav || !item.total_shares) return <span style={{ color: colors.muted }}>—</span>;
+              const value = Number(item.total_shares) * Number(nav.nav_per_share);
+              return <strong>${fmtUsd(value)}</strong>;
+            }},
+            { key: 'navDate', title: 'Latest NAV Date', render: (item) => {
+              const nav = latestNavByFund[item.id];
+              return nav ? <span style={{ color: colors.muted, fontSize: 12 }}>{nav.nav_date}</span> : '—';
+            }},
             { key: 'created', title: 'Created', render: (item) => item.created_at ? item.created_at.slice(0, 10) : '—' },
             ...(canWrite ? [{
               key: 'actions',
@@ -133,9 +173,9 @@ export default function Page({ rows, total, error }: Props) {
             </select>
           </FormField>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
-            <button type='button' onClick={closeModals} style={styles.buttonSecondary} disabled={submitting}>Cancel</button>
+            <button type='button' onClick={closeModals} style={styles.buttonSecondary} disabled={submitting}>{t('cancel')}</button>
             <button style={styles.buttonPrimary} disabled={submitting} type='submit'>
-              {submitting ? 'Creating...' : 'Create Fund'}
+              {submitting ? t('creating') : 'Create Fund'}
             </button>
           </div>
         </form>
@@ -158,9 +198,9 @@ export default function Page({ rows, total, error }: Props) {
             </select>
           </FormField>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
-            <button type='button' onClick={closeModals} style={styles.buttonSecondary} disabled={submitting}>Cancel</button>
+            <button type='button' onClick={closeModals} style={styles.buttonSecondary} disabled={submitting}>{t('cancel')}</button>
             <button style={styles.buttonPrimary} disabled={submitting} type='submit'>
-              {submitting ? 'Saving...' : 'Save Changes'}
+              {submitting ? t('saving') : 'Save Changes'}
             </button>
           </div>
         </form>
@@ -174,13 +214,17 @@ export async function getServerSideProps(context: any) {
   if ('redirect' in auth) return auth;
 
   try {
-    const fundData = await getFunds(1, 100, auth.accessToken);
+    const [fundData, navData] = await Promise.all([
+      getFunds(1, 100, auth.accessToken),
+      getNav(undefined, auth.accessToken),
+    ]);
     return {
       props: {
         initialUser: auth.initialUser,
         initialLocale: auth.initialLocale,
         rows: fundData.items ?? [],
         total: fundData.pagination?.total ?? fundData.items?.length ?? 0,
+        navRecords: navData ?? [],
       },
     };
   } catch (error) {
@@ -190,6 +234,7 @@ export async function getServerSideProps(context: any) {
         initialLocale: auth.initialLocale,
         rows: [],
         total: 0,
+        navRecords: [],
         error: error instanceof Error ? error.message : 'unknown error',
       },
     };

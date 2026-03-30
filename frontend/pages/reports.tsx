@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { useState } from 'react';
 import Layout from '../components/Layout';
 import ProductTable from '../components/ProductTable';
 import StatCard from '../components/StatCard';
@@ -105,8 +106,46 @@ function downloadReport(report: ReportOverview, type: 'json' | 'csv') {
   URL.revokeObjectURL(url);
 }
 
+// Generate year options: current year ± 3
+function yearOptions() {
+  const now = new Date().getFullYear();
+  return Array.from({ length: 7 }, (_, i) => now - 3 + i);
+}
+
+// Derive default period value parts from a period value string
+function parsePeriodValue(type: string, value: string) {
+  if (type === 'quarter') {
+    const m = value.match(/^(\d{4})-(Q[1-4])$/i);
+    return { year: m ? m[1] : String(new Date().getFullYear()), quarter: m ? m[2].toUpperCase() : 'Q1' };
+  }
+  if (type === 'year') return { year: value || String(new Date().getFullYear()), quarter: 'Q1' };
+  // month: YYYY-MM
+  return { year: value ? value.slice(0, 4) : String(new Date().getFullYear()), quarter: 'Q1' };
+}
+
 export default function Page({ report, funds, clients, filters, error }: Props) {
   const { t } = useI18n();
+
+  const [periodType, setPeriodType] = useState(filters.periodType);
+  const parts = parsePeriodValue(filters.periodType, filters.periodValue);
+  const [qYear, setQYear] = useState(parts.year);
+  const [qQuarter, setQQuarter] = useState(parts.quarter);
+
+  // For form submission: assemble quarter value before submit
+  function handleFormSubmit(e: React.FormEvent<HTMLFormElement>) {
+    if (periodType === 'quarter') {
+      // Inject hidden periodValue before native form submit
+      const form = e.currentTarget;
+      let hidden = form.querySelector<HTMLInputElement>('input[name="periodValue"][type="hidden"]');
+      if (!hidden) {
+        hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'periodValue';
+        form.appendChild(hidden);
+      }
+      hidden.value = `${qYear}-${qQuarter}`;
+    }
+  }
 
   return (
     <Layout title={t('reportsTitle')} subtitle={t('reportsSubtitle')} requiredPermission='reports.read'>
@@ -115,10 +154,10 @@ export default function Page({ report, funds, clients, filters, error }: Props) 
       <div style={styles.grid2}>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>{t('reportFilters')}</h3>
-          <form method='get' style={{ display: 'grid', gap: 12 }}>
+          <form method='get' style={{ display: 'grid', gap: 12 }} onSubmit={handleFormSubmit}>
             <div>
               <label style={styles.label}>{t('periodType')}</label>
-              <select name='periodType' defaultValue={filters.periodType} style={styles.input}>
+              <select name='periodType' value={periodType} onChange={e => setPeriodType(e.target.value)} style={styles.input}>
                 <option value='month'>{t('month')}</option>
                 <option value='quarter'>{t('quarter')}</option>
                 <option value='year'>{t('year')}</option>
@@ -126,7 +165,37 @@ export default function Page({ report, funds, clients, filters, error }: Props) 
             </div>
             <div>
               <label style={styles.label}>{t('periodValue')}</label>
-              <input name='periodValue' defaultValue={filters.periodValue} style={styles.input} placeholder='2026-Q1 / 2026-03 / 2026' />
+              {periodType === 'month' && (
+                <input
+                  type='month'
+                  name='periodValue'
+                  defaultValue={filters.periodType === 'month' ? filters.periodValue : `${new Date().getFullYear()}-01`}
+                  style={styles.input}
+                  placeholder='YYYY-MM'
+                />
+              )}
+              {periodType === 'quarter' && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <select value={qYear} onChange={e => setQYear(e.target.value)} style={{ ...styles.input, flex: 1 }}>
+                    {yearOptions().map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                  <select value={qQuarter} onChange={e => setQQuarter(e.target.value)} style={{ ...styles.input, flex: 1 }}>
+                    <option value='Q1'>Q1 (Jan–Mar)</option>
+                    <option value='Q2'>Q2 (Apr–Jun)</option>
+                    <option value='Q3'>Q3 (Jul–Sep)</option>
+                    <option value='Q4'>Q4 (Oct–Dec)</option>
+                  </select>
+                </div>
+              )}
+              {periodType === 'year' && (
+                <select
+                  name='periodValue'
+                  defaultValue={filters.periodType === 'year' ? filters.periodValue : String(new Date().getFullYear())}
+                  style={styles.input}
+                >
+                  {yearOptions().map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              )}
             </div>
             <div>
               <label style={styles.label}>{t('fund')}</label>
