@@ -577,11 +577,11 @@ def seed_fund_capital(fund_id: int, req: SeedCapitalRequest, db: Session = Depen
     if req.client_id:
         existing_balance = db.query(func.sum(_ShareTx.shares)).filter(
             _ShareTx.fund_id == fund_id, _ShareTx.client_id == req.client_id,
-            _ShareTx.tx_type.in_(["seed", "subscription"]),
+            _ShareTx.tx_type.in_(["seed", "subscribe"]),
         ).scalar() or Decimal("0")
         redemptions = db.query(func.sum(_ShareTx.shares)).filter(
             _ShareTx.fund_id == fund_id, _ShareTx.client_id == req.client_id,
-            _ShareTx.tx_type == "redemption",
+            _ShareTx.tx_type == "redeem",
         ).scalar() or Decimal("0")
         shares_after = Decimal(str(existing_balance)) - Decimal(str(redemptions))
     register_entry = ShareRegister(
@@ -667,11 +667,15 @@ def upsert_cash_position(req: CashPositionUpsertRequest, db: Session = Depends(g
         account_id=req.account_id, currency=req.currency.upper(), snapshot_date=req.snapshot_date
     ).first()
     if existing:
+        before_amount = float(existing.amount)
         existing.amount = req.amount
         if req.note is not None:
             existing.note = req.note
         db.commit()
         db.refresh(existing)
+        record_audit(db, actor, action="cash.update", entity_type="cash_position", entity_id=str(existing.id),
+                     detail={"account_id": req.account_id, "currency": req.currency.upper(), "snapshot_date": req.snapshot_date.isoformat(),
+                             "before_amount": before_amount, "after_amount": float(req.amount), "note": req.note})
         return _serialize_cash(existing)
     row = CashPosition(
         account_id=req.account_id,
@@ -683,6 +687,9 @@ def upsert_cash_position(req: CashPositionUpsertRequest, db: Session = Depends(g
     db.add(row)
     db.commit()
     db.refresh(row)
+    record_audit(db, actor, action="cash.create", entity_type="cash_position", entity_id=str(row.id),
+                 detail={"account_id": req.account_id, "currency": req.currency.upper(), "snapshot_date": req.snapshot_date.isoformat(),
+                         "amount": float(req.amount), "note": req.note})
     return _serialize_cash(row)
 
 
@@ -692,6 +699,9 @@ def delete_cash_position(cash_id: int, db: Session = Depends(get_db), actor: Act
     row = db.query(CashPosition).filter(CashPosition.id == cash_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Cash position not found.")
+    record_audit(db, actor, action="cash.delete", entity_type="cash_position", entity_id=str(row.id),
+                 detail={"account_id": row.account_id, "currency": row.currency, "snapshot_date": row.snapshot_date.isoformat(),
+                         "amount": float(row.amount)})
     db.delete(row)
     db.commit()
 
