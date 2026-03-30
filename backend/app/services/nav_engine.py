@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import calendar
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal, getcontext
 from typing import Any, Optional
 
 # Explicit precision context for NAV calculations involving large position quantities.
 getcontext().prec = 28
 
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.models import Account, AssetPrice, AssetSnapshot, CashPosition, ExchangeRate, Fund, NAVRecord, Position
@@ -34,9 +37,32 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
     if not account_ids:
         raise ValueError(f"Fund {fund_id} has no accounts.")
 
+    # For each (account, asset), take the latest snapshot on or before nav_date.
+    # This ensures we always use the most recent known position even when there
+    # is no snapshot exactly on nav_date (e.g. a quarterly NAV date).
+    latest_subq = (
+        db.query(
+            Position.account_id,
+            Position.asset_code,
+            func.max(Position.snapshot_date).label("max_date"),
+        )
+        .filter(
+            Position.account_id.in_(account_ids),
+            Position.snapshot_date <= nav_date,
+        )
+        .group_by(Position.account_id, Position.asset_code)
+        .subquery()
+    )
     positions = (
         db.query(Position)
-        .filter(Position.snapshot_date == nav_date, Position.account_id.in_(account_ids))
+        .join(
+            latest_subq,
+            and_(
+                Position.account_id == latest_subq.c.account_id,
+                Position.asset_code == latest_subq.c.asset_code,
+                Position.snapshot_date == latest_subq.c.max_date,
+            ),
+        )
         .order_by(Position.account_id.asc(), Position.asset_code.asc())
         .all()
     )
@@ -93,11 +119,32 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
             bucket["price_usd"] = bucket["value_usd"] / bucket["quantity"]
         bucket["fx_rate_to_usd"] = valuation["fx_rate_to_usd"]
 
-    # Include cash positions in total assets
-    cash_rows = db.query(CashPosition).filter(
-        CashPosition.account_id.in_(account_ids),
-        CashPosition.snapshot_date == nav_date,
-    ).all()
+    # Include cash positions: latest snapshot per (account, currency) on or before nav_date
+    cash_subq = (
+        db.query(
+            CashPosition.account_id,
+            CashPosition.currency,
+            func.max(CashPosition.snapshot_date).label("max_date"),
+        )
+        .filter(
+            CashPosition.account_id.in_(account_ids),
+            CashPosition.snapshot_date <= nav_date,
+        )
+        .group_by(CashPosition.account_id, CashPosition.currency)
+        .subquery()
+    )
+    cash_rows = (
+        db.query(CashPosition)
+        .join(
+            cash_subq,
+            and_(
+                CashPosition.account_id == cash_subq.c.account_id,
+                CashPosition.currency == cash_subq.c.currency,
+                CashPosition.snapshot_date == cash_subq.c.max_date,
+            ),
+        )
+        .all()
+    )
     cash_total = ZERO
     for cr in cash_rows:
         cash_total += _resolve_rate_to_usd(cr.currency.upper(), rate_map) * Decimal(str(cr.amount))
@@ -142,6 +189,58 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
     db.commit()
     db.refresh(nav)
     return nav
+
+
+def rebuild_nav_batch(db: Session, fund_id: int, start_date: date, end_date: date, frequency: str = "quarterly", force: bool = False) -> list[dict]:
+    """
+    Batch-rebuild NAV records for a date range at a given frequency.
+    Returns a list of {date, nav_per_share, status} result dicts.
+    """
+    dates = _generate_nav_dates(start_date, end_date, frequency)
+    results = []
+    for d in dates:
+        try:
+            nav = calc_nav(db, fund_id, d, force=force)
+            results.append({
+                "date": d.isoformat(),
+                "nav_per_share": float(nav.nav_per_share),
+                "total_assets_usd": float(nav.total_assets_usd),
+                "status": "ok",
+            })
+        except Exception as exc:
+            results.append({"date": d.isoformat(), "status": "error", "msg": str(exc)})
+    return results
+
+
+def _generate_nav_dates(start: date, end: date, frequency: str) -> list[date]:
+    """Generate NAV calculation dates for the given frequency."""
+    dates: list[date] = []
+    if frequency == "quarterly":
+        for year in range(start.year, end.year + 1):
+            for month in [3, 6, 9, 12]:
+                last_day = calendar.monthrange(year, month)[1]
+                d = date(year, month, last_day)
+                if start <= d <= end:
+                    dates.append(d)
+    elif frequency == "yearly":
+        for year in range(start.year, end.year + 1):
+            d = date(year, 12, 31)
+            if start <= d <= end:
+                dates.append(d)
+    elif frequency == "monthly":
+        year, month = start.year, start.month
+        while True:
+            last_day = calendar.monthrange(year, month)[1]
+            d = date(year, month, last_day)
+            if d > end:
+                break
+            if d >= start:
+                dates.append(d)
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+    return sorted(dates)
 
 
 def list_nav(db: Session, fund_id: Optional[int] = None):

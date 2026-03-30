@@ -50,10 +50,12 @@ COLUMN_ALIASES = {
     "position_date": "snapshot_date",
     "snapshot_date": "snapshot_date",
 }
-BUY_TX_TYPES = {"buy", "b", "subscribe", "sub", "deposit"}
+BUY_TX_TYPES = {"buy", "b", "subscribe", "sub"}
 SELL_TX_TYPES = {"sell", "s", "redeem", "redemption", "withdrawal"}
 # Forex/cash tx types are pass-through — not normalized to buy/sell
 FOREX_CASH_TX_TYPES = {"forex_buy", "forex_sell", "cash_in", "cash_out"}
+# Deposit rows flagged for manual capital-event confirmation (never auto-create Position)
+DEPOSIT_PENDING_TX_TYPE = "deposit_pending"
 
 # Map import source name → platform-specific preprocessor
 _PREPROCESSORS = {
@@ -127,7 +129,11 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
     if not preview_rows:
         raise ValueError("This batch has no parsed rows to confirm.")
 
-    for item in preview_rows:
+    # Separate deposit rows (pending capital events) from trade/cash rows
+    trade_rows = [r for r in preview_rows if r["tx_type"] != DEPOSIT_PENDING_TX_TYPE]
+    deposit_rows = [r for r in preview_rows if r["tx_type"] == DEPOSIT_PENDING_TX_TYPE]
+
+    for item in trade_rows:
         db.add(
             Transaction(
                 account_id=batch.account_id,
@@ -142,7 +148,7 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
             )
         )
 
-    positions = _build_positions(batch.account_id, preview_rows)
+    positions = _build_positions(batch.account_id, trade_rows)
     snapshot_dates = {position["snapshot_date"] for position in positions}
     for snapshot_date in snapshot_dates:
         db.query(Position).filter(
@@ -163,10 +169,26 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
         )
 
     # Generate CashPosition snapshots from forex/cash transactions
-    _build_cash_positions(db, batch.account_id, preview_rows)
+    _build_cash_positions(db, batch.account_id, trade_rows)
 
-    batch.confirmed_count = len(preview_rows)
-    batch.status = IMPORT_STATUS_CONFIRMED
+    # Store deposit rows in pending_deposits for manual confirmation
+    if deposit_rows:
+        pending = [
+            {
+                "date": r["trade_date"],
+                "amount_usd": float(r["quantity"]),
+                "tx_type": r["tx_type"],
+                "currency": r["currency"],
+                "note": r.get("asset_code", ""),
+            }
+            for r in deposit_rows
+        ]
+        batch.pending_deposits = json.dumps(pending)
+        batch.status = "confirmed_pending_deposits"
+    else:
+        batch.status = IMPORT_STATUS_CONFIRMED
+
+    batch.confirmed_count = len(trade_rows)
     batch.failed_reason = None
     db.commit()
     db.refresh(batch)
@@ -186,7 +208,24 @@ def serialize_batch(batch: ImportBatch) -> dict[str, Any]:
         "failed_reason": batch.failed_reason,
         "imported_at": batch.imported_at.isoformat() if batch.imported_at else None,
         "preview_rows": batch.preview_rows,
+        "pending_deposits": batch.pending_deposit_rows,
     }
+
+
+def reset_batch(db: Session, batch_id: int) -> ImportBatch:
+    """Roll back all data created by this import batch."""
+    batch = get_batch(db, batch_id)
+    if not batch:
+        raise ValueError(f"Import batch {batch_id} was not found.")
+
+    db.query(Transaction).filter(Transaction.import_batch_id == batch_id).delete()
+    batch.pending_deposits = None
+    batch.status = "reset"
+    batch.confirmed_count = 0
+    batch.failed_reason = None
+    db.commit()
+    db.refresh(batch)
+    return batch
 
 
 def _parse_csv_rows(content: bytes) -> list[dict[str, Any]]:
@@ -248,8 +287,8 @@ def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> lis
     snapshots = {}
 
     for item in sorted(preview_rows, key=lambda row: (row["snapshot_date"], row["trade_date"], row["row_number"], row["asset_code"])):
-        # Skip forex/cash rows — they don't create stock positions
-        if item["tx_type"] in FOREX_CASH_TX_TYPES:
+        # Skip forex/cash/deposit rows — they don't create stock positions
+        if item["tx_type"] in FOREX_CASH_TX_TYPES or item["tx_type"] == DEPOSIT_PENDING_TX_TYPE:
             continue
         position_key = (item["asset_code"], item["currency"])
         state = position_state[position_key]
@@ -384,6 +423,8 @@ def _normalize_tx_type(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "_")
     if normalized in FOREX_CASH_TX_TYPES:
         return normalized
+    if normalized == DEPOSIT_PENDING_TX_TYPE:
+        return DEPOSIT_PENDING_TX_TYPE
     if normalized in BUY_TX_TYPES:
         return "buy"
     if normalized in SELL_TX_TYPES:
@@ -392,7 +433,7 @@ def _normalize_tx_type(value: str) -> str:
 
 
 def _normalize_quantity_for_tx_type(quantity: Decimal, tx_type: str) -> Decimal:
-    if tx_type in FOREX_CASH_TX_TYPES:
+    if tx_type in FOREX_CASH_TX_TYPES or tx_type == DEPOSIT_PENDING_TX_TYPE:
         return quantity.copy_abs()  # always positive, direction is in tx_type
     if tx_type == "sell" and quantity > 0:
         return quantity * Decimal("-1")

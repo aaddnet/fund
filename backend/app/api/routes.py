@@ -22,10 +22,12 @@ from app.schemas.common import (
     ClientUpdateRequest,
     AccountCreateRequest,
     AccountUpdateRequest,
+    DepositConfirmRequest,
     FeeCalcRequest,
     FundCreateRequest,
     FundUpdateRequest,
     NavCalcRequest,
+    NavRebuildRequest,
     PriceFetchRequest,
     RateFetchRequest,
     RateManualRequest,
@@ -54,8 +56,8 @@ from app.services.auth import (
 )
 from app.services.exchange_rate import fetch_and_save_rates, save_rate_manual
 from app.services.fee_service import calc_fee, list_fees
-from app.services.import_service import confirm_batch, get_batch, list_batches, serialize_batch, upload_csv
-from app.services.nav_engine import calc_nav, list_nav
+from app.services.import_service import confirm_batch, get_batch, list_batches, reset_batch, serialize_batch, upload_csv
+from app.services.nav_engine import calc_nav, list_nav, rebuild_nav_batch
 from app.services.price_service import fetch_and_save_prices
 from app.services.scheduler import SCHEDULER_JOB_FX_WEEKLY, list_job_runs, run_weekly_fx_job
 from app.services.share_service import balances, history, redeem, subscribe
@@ -483,6 +485,77 @@ def confirm_import_batch(batch_id: int, db: Session = Depends(get_db), actor: Ac
         return serialize_batch(batch)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/import/{batch_id}/pending-deposits")
+def get_pending_deposits(batch_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "import.read")
+    batch = get_batch(db, batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found.")
+    return batch.pending_deposit_rows
+
+
+@router.post("/import/{batch_id}/confirm-deposit")
+def confirm_deposit(batch_id: int, req: DepositConfirmRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "import.write")
+    batch = get_batch(db, batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found.")
+    pending = batch.pending_deposit_rows
+    if req.deposit_index < 0 or req.deposit_index >= len(pending):
+        raise HTTPException(status_code=400, detail="Invalid deposit_index.")
+    deposit = pending[req.deposit_index]
+    if req.confirm_as == "additional":
+        if req.client_id is None:
+            raise HTTPException(status_code=400, detail="client_id is required when confirm_as='additional'.")
+        account = db.query(Account).filter(Account.id == batch.account_id).first()
+        if not account:
+            raise HTTPException(status_code=400, detail="Batch account not found.")
+        from app.services.share_service import subscribe as _subscribe
+        from datetime import date as _date
+        tx_date = _date.fromisoformat(deposit["date"])
+        try:
+            _subscribe(db, account.fund_id, req.client_id, tx_date, Decimal(str(deposit["amount_usd"])))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    # Mark this deposit entry as handled
+    pending[req.deposit_index]["confirmed_as"] = req.confirm_as
+    pending[req.deposit_index]["note"] = req.note
+    import json as _json_mod
+    batch.pending_deposits = _json_mod.dumps(pending)
+    # If all deposits handled, update status
+    if all(d.get("confirmed_as") for d in pending):
+        batch.status = "confirmed"
+    record_audit(
+        db, actor, action="import.confirm_deposit",
+        entity_type="import_batch", entity_id=str(batch.id),
+        detail={"deposit_index": req.deposit_index, "confirm_as": req.confirm_as, "amount_usd": deposit["amount_usd"]},
+    )
+    db.commit()
+    return serialize_batch(batch)
+
+
+@router.post("/import/{batch_id}/reset")
+def reset_import_batch(batch_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "import.write")
+    try:
+        batch = reset_batch(db, batch_id)
+        record_audit(
+            db, actor, action="import.reset",
+            entity_type="import_batch", entity_id=str(batch.id),
+            detail={"account_id": batch.account_id},
+        )
+        return serialize_batch(batch)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/nav/rebuild-batch")
+def rebuild_nav_batch_endpoint(req: NavRebuildRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "nav.write")
+    results = rebuild_nav_batch(db, req.fund_id, req.start_date, req.end_date, req.frequency, force=req.force)
+    return {"fund_id": req.fund_id, "results": results}
 
 
 @router.get("/fund")

@@ -97,12 +97,20 @@ class ImportBatch(Base, TimestampMixin):
     confirmed_count = Column(Integer, nullable=False, default=0)
     failed_reason = Column(Text)
     preview_json = Column(Text, nullable=False, default="[]")
+    pending_deposits = Column(Text)  # JSON list of deposit rows awaiting capital-event confirmation
     imported_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     @property
     def preview_rows(self):
         try:
             return json.loads(self.preview_json or "[]")
+        except json.JSONDecodeError:
+            return []
+
+    @property
+    def pending_deposit_rows(self):
+        try:
+            return json.loads(self.pending_deposits or "[]")
         except json.JSONDecodeError:
             return []
 

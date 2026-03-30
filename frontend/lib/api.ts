@@ -212,6 +212,15 @@ export type ImportPreviewRow = {
   snapshot_date: string;
 };
 
+export type PendingDeposit = {
+  date: string;
+  amount_usd: number;
+  tx_type: string;
+  currency: string;
+  note: string;
+  confirmed_as?: string;
+};
+
 export type ImportBatch = {
   id: number;
   source: string;
@@ -224,6 +233,7 @@ export type ImportBatch = {
   failed_reason?: string | null;
   imported_at?: string | null;
   preview_rows: ImportPreviewRow[];
+  pending_deposits?: PendingDeposit[];
 };
 
 export type CustomerView = {
@@ -584,6 +594,36 @@ export async function createNav(payload: { fund_id: number; nav_date: string; fo
 
 export async function deleteNav(navId: number) {
   return fetchJson<void>(`/nav/${navId}`, { method: 'DELETE' });
+}
+
+export async function getPendingDeposits(batchId: number): Promise<PendingDeposit[]> {
+  return fetchJson<PendingDeposit[]>(`/import/${batchId}/pending-deposits`);
+}
+
+export async function confirmDeposit(batchId: number, payload: { deposit_index: number; client_id?: number | null; confirm_as: string; note?: string }) {
+  return fetchJson<ImportBatch>(`/import/${batchId}/confirm-deposit`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function resetImportBatch(batchId: number) {
+  return fetchJson<ImportBatch>(`/import/${batchId}/reset`, { method: 'POST' });
+}
+
+export type NavRebuildResult = {
+  date: string;
+  nav_per_share?: number;
+  total_assets_usd?: number;
+  status: string;
+  msg?: string;
+};
+
+export async function rebuildNavBatch(payload: { fund_id: number; start_date: string; end_date: string; frequency: string; force?: boolean }) {
+  return fetchJson<{ fund_id: number; results: NavRebuildResult[] }>('/nav/rebuild-batch', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function createShareSubscription(payload: { fund_id: number; client_id: number; tx_date: string; amount_usd: number }) {

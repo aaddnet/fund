@@ -140,3 +140,18 @@ class AuthUserUpdateRequest(BaseModel):
     role: Optional[str] = None
     client_scope_id: Optional[int] = None
     is_active: Optional[bool] = None
+
+
+class DepositConfirmRequest(BaseModel):
+    deposit_index: int
+    client_id: Optional[int] = None
+    confirm_as: str  # 'additional' or 'skip'
+    note: str = ""
+
+
+class NavRebuildRequest(BaseModel):
+    fund_id: int
+    start_date: date
+    end_date: date
+    frequency: str = "quarterly"  # 'quarterly' / 'yearly' / 'monthly'
+    force: bool = False

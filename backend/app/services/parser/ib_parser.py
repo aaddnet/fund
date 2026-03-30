@@ -47,17 +47,32 @@ _IB_ZH_COL_MAP = {
     "净额": "net_amount",
 }
 
-# Chinese tx_type mapping (None = needs sign-based detection)
+# Chinese tx_type mapping — explicit routing by 交易类型 column
+# "zh_cash" = determine cash_in/cash_out from sign of net/total amount
 _ZH_TX_TYPE_MAP = {
+    # Position-affecting trades
     "买入": "buy",
     "买": "buy",
     "卖出": "sell",
     "卖": "sell",
+    # Cash-only (income)
     "股息": "cash_in",
-    "利息": "cash_in",
+    "替代支付": "cash_in",    # dividend substitute payment
+    "贷方利息": "cash_in",   # credit interest income
+    # Cash-only (expense, sign is negative so we detect from net)
+    "外国预扣税": "zh_cash",  # withholding tax → net is negative → cash_out
+    "借方利息": "zh_cash",    # debit interest / margin cost → net is negative → cash_out
+    # Adjustments — sign determines direction
+    "调整": "zh_cash",
+    "现金转账": "zh_cash",   # small internal cash transfer
+    # Deposit / capital events — flagged for manual confirmation
+    "存款": "deposit_pending",
+    "电子资金转账": "deposit_pending",
+    # Ignored (non-cash P&L translation entries)
+    "FX Translations P&L": "ignore",
 }
-# Types that need sign-based detection
-_ZH_CASH_TYPES = {"调整", "转换", "外汇"}
+# Legacy set kept for backward compat (no longer used in routing)
+_ZH_CASH_TYPES: set[str] = set()
 
 # Flex Query: IB column name (lowered) → standard column name
 _IB_FLEX_COL_MAP = {
@@ -244,17 +259,21 @@ def _emit_zh_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
         tx_type_zh = _get("tx_type_zh").strip()
         tx_type = _ZH_TX_TYPE_MAP.get(tx_type_zh, "")
 
-        # Parse quantity — treat "-" as empty
-        qty_raw = _get("quantity").replace(",", "").replace("-", "")
-        total_raw = _get("total_amount").replace(",", "").replace("-", "")
-        net_raw = _get("net_amount").replace(",", "").replace("-", "")
-        price_raw = _get("price").replace(",", "").replace("-", "")
+        # Skip explicitly ignored types (FX P&L translation entries)
+        if tx_type == "ignore":
+            continue
 
-        # Try to get quantity; if missing, derive from total/price
-        qty = _safe_float(qty_raw)
-        price = _safe_float(price_raw)
-        total = _safe_float(total_raw)
-        net = _safe_float(net_raw)
+        # Parse raw numeric fields (keep sign for now)
+        qty_raw = _get("quantity").replace(",", "")
+        total_raw = _get("total_amount").replace(",", "")
+        net_raw = _get("net_amount").replace(",", "")
+        price_raw = _get("price").replace(",", "")
+
+        qty = _safe_float(qty_raw.replace("-", ""))
+        price = _safe_float(price_raw.replace("-", ""))
+        # Keep sign for total/net to determine cash direction
+        total_signed = _safe_float(total_raw)
+        net_signed = _safe_float(net_raw)
         fee_raw = _get("fee").replace(",", "")
         fee = abs(_safe_float(fee_raw))
 
@@ -263,25 +282,50 @@ def _emit_zh_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
             currency = "USD"
 
         # Skip rows without meaningful data
-        if qty == 0 and total == 0 and net == 0:
+        if qty == 0 and total_signed == 0 and net_signed == 0:
             continue
 
-        # For adjustment/dividend/interest rows with no qty, use total as qty and price=1
-        if qty == 0 and total != 0:
-            qty = total
-            price = 1.0
+        # Resolve "zh_cash" placeholder: determine direction from net/total sign
+        if tx_type == "zh_cash":
+            sign_val = net_signed or total_signed
+            tx_type = "cash_in" if sign_val >= 0 else "cash_out"
 
-        if qty == 0:
+        # For deposit_pending rows: use abs(net) as the amount, price=1
+        if tx_type == "deposit_pending":
+            dep_amount = abs(net_signed) or abs(total_signed)
+            if dep_amount == 0:
+                continue
+            note = _get("description")
+            writer.writerow([
+                trade_date,
+                asset_code or currency,
+                str(dep_amount),
+                "1",
+                currency,
+                "0",
+                tx_type,
+            ])
             continue
 
-        # Determine tx_type if not already classified via _ZH_TX_TYPE_MAP
+        # For buy/sell rows with explicit quantity: quantity column has actual share count
+        # For cash-only rows (dividends, interest, etc.): quantity may be 0 or the dollar amount
+        if tx_type in ("buy", "sell"):
+            # Use actual share quantity; skip if zero
+            if qty == 0:
+                continue
+        else:
+            # cash_in / cash_out rows: quantity = absolute dollar amount
+            if qty == 0:
+                qty = abs(net_signed) or abs(total_signed)
+                price = 1.0
+            if qty == 0:
+                continue
+
+        # Determine tx_type if not yet classified (unknown 交易类型 → fallback heuristic)
         if not tx_type:
             desc_lower = description.lower() if description else ""
-            sign_val = net or total or qty
-            # P&L adjustments, dividends, interest → cash
-            is_cash_adj = any(kw in desc_lower for kw in ("p&l", "dividend", "interest", "adjustment", "withholding")) or \
-                          (tx_type_zh == "调整")
-            # Forex: 转换/外汇 with currency pair, or description mentions forex/conversion
+            sign_val = net_signed or total_signed or qty
+            is_cash_adj = any(kw in desc_lower for kw in ("p&l", "dividend", "interest", "adjustment", "withholding"))
             is_fx = (tx_type_zh in ("转换", "外汇") and ("." in asset_code or "/" in asset_code or len(asset_code) == 6)) or \
                     (not is_cash_adj and any(kw in desc_lower for kw in ("forex", "conversion")))
             if is_cash_adj:
@@ -289,11 +333,10 @@ def _emit_zh_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
             elif is_fx:
                 tx_type = "forex_buy" if sign_val > 0 else "forex_sell"
             else:
-                tx_type = "sell" if qty < 0 else "buy"
+                tx_type = "sell" if (net_signed or total_signed) < 0 else "buy"
 
         # Derive asset_code from description if 代码 is empty
         if not asset_code and description:
-            # Try to extract ticker from description (e.g. "AAPL ..." or "FX Translations P&L")
             asset_code = _extract_asset_from_description(description, currency, tx_type)
 
         if not asset_code:
