@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import Account, ImportBatch, Position, Transaction
+from app.models import Account, CashPosition, ImportBatch, Position, Transaction
 from app.services.parser import ib_parser, kraken_parser, moomoo_parser, schwab_parser
 
 IMPORT_STATUS_UPLOADED = "uploaded"
@@ -52,6 +52,8 @@ COLUMN_ALIASES = {
 }
 BUY_TX_TYPES = {"buy", "b", "subscribe", "sub", "deposit"}
 SELL_TX_TYPES = {"sell", "s", "redeem", "redemption", "withdrawal"}
+# Forex/cash tx types are pass-through — not normalized to buy/sell
+FOREX_CASH_TX_TYPES = {"forex_buy", "forex_sell", "cash_in", "cash_out"}
 
 # Map import source name → platform-specific preprocessor
 _PREPROCESSORS = {
@@ -160,6 +162,9 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
             )
         )
 
+    # Generate CashPosition snapshots from forex/cash transactions
+    _build_cash_positions(db, batch.account_id, preview_rows)
+
     batch.confirmed_count = len(preview_rows)
     batch.status = IMPORT_STATUS_CONFIRMED
     batch.failed_reason = None
@@ -238,11 +243,14 @@ def _parse_csv_rows(content: bytes) -> list[dict[str, Any]]:
 def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from collections import defaultdict
     from decimal import Decimal
-    
+
     position_state = defaultdict(lambda: {"quantity": Decimal("0"), "cost_basis": Decimal("0")})
     snapshots = {}
 
     for item in sorted(preview_rows, key=lambda row: (row["snapshot_date"], row["trade_date"], row["row_number"], row["asset_code"])):
+        # Skip forex/cash rows — they don't create stock positions
+        if item["tx_type"] in FOREX_CASH_TX_TYPES:
+            continue
         position_key = (item["asset_code"], item["currency"])
         state = position_state[position_key]
         quantity = Decimal(str(item["quantity"]))
@@ -285,6 +293,84 @@ def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> lis
     return sorted(positions, key=lambda row: (row["snapshot_date"], row["asset_code"], row["currency"]))
 
 
+def _build_cash_positions(db: Session, account_id: int, preview_rows: list[dict[str, Any]]) -> None:
+    """
+    Build CashPosition snapshots from forex/cash rows.
+
+    For forex trades (e.g. forex_buy EUR.USD qty=10000 price=1.12):
+      - Base currency (EUR): +10000
+      - Quote currency (USD): -10000 * 1.12 = -11200
+    For cash_in/cash_out: direct currency amount.
+
+    Amounts are accumulated per (currency, snapshot_date) and upserted.
+    """
+    cash_deltas: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))  # (currency, snapshot_date) → delta
+
+    for item in preview_rows:
+        tx_type = item["tx_type"]
+        if tx_type not in FOREX_CASH_TX_TYPES:
+            continue
+
+        qty = Decimal(str(item["quantity"]))
+        price = Decimal(str(item["price"]))
+        snapshot_date = item["snapshot_date"]
+        asset_code = item["asset_code"]  # e.g. "EUR.USD" for forex
+        trade_currency = item["currency"]
+
+        if tx_type in ("forex_buy", "forex_sell"):
+            # Parse currency pair from asset_code (e.g. "EUR.USD", "EUR/USD", "EURUSD")
+            base_ccy, quote_ccy = _parse_currency_pair(asset_code, trade_currency)
+            notional = qty * price
+            if tx_type == "forex_buy":
+                cash_deltas[(base_ccy, snapshot_date)] += qty
+                cash_deltas[(quote_ccy, snapshot_date)] -= notional
+            else:  # forex_sell
+                cash_deltas[(base_ccy, snapshot_date)] -= qty
+                cash_deltas[(quote_ccy, snapshot_date)] += notional
+        elif tx_type == "cash_in":
+            cash_deltas[(trade_currency, snapshot_date)] += qty
+        elif tx_type == "cash_out":
+            cash_deltas[(trade_currency, snapshot_date)] -= qty
+
+    # Upsert CashPosition for each (currency, date) with non-zero delta
+    for (currency, snapshot_date_str), delta in cash_deltas.items():
+        if delta == 0:
+            continue
+        snap_date = _parse_date_value(snapshot_date_str)
+        existing = db.query(CashPosition).filter_by(
+            account_id=account_id, currency=currency, snapshot_date=snap_date,
+        ).first()
+        if existing:
+            existing.amount = Decimal(str(existing.amount)) + delta
+            existing.note = (existing.note or "") + "; import_adjusted"
+        else:
+            db.add(CashPosition(
+                account_id=account_id,
+                currency=currency,
+                amount=delta,
+                snapshot_date=snap_date,
+                note="auto_from_import",
+            ))
+
+
+def _parse_currency_pair(asset_code: str, fallback_quote: str) -> tuple[str, str]:
+    """
+    Parse forex pair into (base, quote) currencies.
+    Handles: EUR.USD, EUR/USD, EURUSD (6 char)
+    """
+    asset = asset_code.upper().strip()
+    for sep in (".", "/", "-"):
+        if sep in asset:
+            parts = asset.split(sep, 1)
+            if len(parts) == 2 and len(parts[0]) == 3 and len(parts[1]) == 3:
+                return parts[0], parts[1]
+    # No separator — try 6-char pair (EURUSD)
+    if len(asset) == 6 and asset.isalpha():
+        return asset[:3], asset[3:]
+    # Fallback: treat asset_code as base currency, use trade currency as quote
+    return asset, fallback_quote.upper()
+
+
 def _normalize_column_name(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "_")
     normalized = normalized.replace("-", "_")
@@ -293,6 +379,8 @@ def _normalize_column_name(value: str) -> str:
 
 def _normalize_tx_type(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "_")
+    if normalized in FOREX_CASH_TX_TYPES:
+        return normalized
     if normalized in BUY_TX_TYPES:
         return "buy"
     if normalized in SELL_TX_TYPES:
@@ -301,6 +389,8 @@ def _normalize_tx_type(value: str) -> str:
 
 
 def _normalize_quantity_for_tx_type(quantity: Decimal, tx_type: str) -> Decimal:
+    if tx_type in FOREX_CASH_TX_TYPES:
+        return quantity.copy_abs()  # always positive, direction is in tx_type
     if tx_type == "sell" and quantity > 0:
         return quantity * Decimal("-1")
     if tx_type == "buy" and quantity < 0:

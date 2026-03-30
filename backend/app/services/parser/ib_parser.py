@@ -181,9 +181,12 @@ def _emit_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
             idx = col_idx.get(col)
             return row[idx].strip() if idx is not None and idx < len(row) else ""
 
-        # Skip non-stock rows if asset_category is present
+        # Classify asset category
         asset_cat = _get("asset_category").lower()
-        if asset_cat and asset_cat in ("forex", "cash", ""):
+        is_forex = asset_cat == "forex"
+        is_cash = asset_cat == "cash"
+        # Skip empty asset_category rows only if value is literally ""
+        if asset_cat == "" and "asset_category" in col_idx:
             continue
 
         trade_date = _normalise_ib_datetime(_get("trade_date"))
@@ -200,7 +203,11 @@ def _emit_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
 
         # Determine tx_type from explicit column or quantity sign
         explicit_type = _get("tx_type").strip().lower()
-        if explicit_type in ("buy", "buy/sell:buy"):
+        if is_forex:
+            tx_type = "forex_buy" if qty > 0 else "forex_sell"
+        elif is_cash:
+            tx_type = "cash_in" if qty > 0 else "cash_out"
+        elif explicit_type in ("buy", "buy/sell:buy"):
             tx_type = "buy"
         elif explicit_type in ("sell", "buy/sell:sell"):
             tx_type = "sell"
