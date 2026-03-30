@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 import Layout from '../../components/Layout';
 import ProductTable from '../../components/ProductTable';
-import { Client, CustomerView, getClients, getCustomerView } from '../../lib/api';
+import { CapitalAccount, Client, CustomerView, getClientCapitalAccounts, getClients, getCustomerView } from '../../lib/api';
 import { useI18n } from '../../lib/i18n';
 import { requirePageAuth } from '../../lib/pageAuth';
 import { colors, formatNumber, styles } from '../../lib/ui';
@@ -11,10 +11,11 @@ type Props = {
   customer?: CustomerView | null;
   clients: Client[];
   selectedClientId: number | null;
+  capitalAccounts?: CapitalAccount[];
   error?: string;
 };
 
-export default function Page({ customer, clients, selectedClientId, error }: Props) {
+export default function Page({ customer, clients, selectedClientId, capitalAccounts = [], error }: Props) {
   const { t } = useI18n();
 
   // Latest locked NAV per share per fund, for computing holding value
@@ -95,6 +96,30 @@ export default function Page({ customer, clients, selectedClientId, error }: Pro
         />
       </div>
 
+      {capitalAccounts.length > 0 && (
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <h3 style={{ marginTop: 0 }}>{t('capitalAccount')}</h3>
+          <ProductTable
+            emptyText="No capital account data."
+            rows={capitalAccounts}
+            columns={[
+              { key: 'fund', title: t('fund'), render: (item) => `Fund #${item.fund_id}` },
+              { key: 'invested', title: t('totalInvested'), render: (item) => `$${formatNumber(item.total_invested_usd)}` },
+              { key: 'redeemed', title: 'Total Redeemed', render: (item) => `$${formatNumber(item.total_redeemed_usd)}` },
+              { key: 'shares', title: t('sharesLabel'), render: (item) => formatNumber(item.current_shares, 6) },
+              { key: 'avgNav', title: t('avgCostNav'), render: (item) => item.avg_cost_nav != null ? formatNumber(item.avg_cost_nav, 6) : t('notAvailable') },
+              { key: 'pnl', title: t('unrealizedPnl'), render: (item) => {
+                if (item.unrealized_pnl_usd == null) return t('notAvailable');
+                const v = item.unrealized_pnl_usd;
+                const color = v >= 0 ? '#16a34a' : '#dc2626';
+                return <span style={{ color, fontWeight: 600 }}>${formatNumber(v)}</span>;
+              }},
+              { key: 'updated', title: 'Last Updated', render: (item) => item.last_updated_date || t('notAvailable') },
+            ]}
+          />
+        </div>
+      )}
+
       <div style={{ ...styles.card, marginTop: 16 }}>
         <h3 style={{ marginTop: 0 }}>{t('relevantNavHistory')}</h3>
         <ProductTable
@@ -126,15 +151,19 @@ export async function getServerSideProps(context: any) {
     const clientData = await getClients({ accessToken: auth.accessToken });
     const clients = clientData.items ?? [];
     const resolvedClientId = selectedClientId ?? clients[0]?.id ?? null;
-    const customer = resolvedClientId ? await getCustomerView(resolvedClientId, auth.accessToken) : null;
+    const [customer, capitalAccounts] = await Promise.all([
+      resolvedClientId ? getCustomerView(resolvedClientId, auth.accessToken) : Promise.resolve(null),
+      resolvedClientId ? getClientCapitalAccounts(resolvedClientId, auth.accessToken).catch(() => []) : Promise.resolve([]),
+    ]);
 
-    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, customer, clients, selectedClientId: resolvedClientId } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, customer, clients, selectedClientId: resolvedClientId, capitalAccounts } };
   } catch (error) {
     return {
       props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale,
         customer: null,
         clients: [],
         selectedClientId,
+        capitalAccounts: [],
         error: error instanceof Error ? error.message : 'unknown error',
       },
     };

@@ -33,6 +33,9 @@ export default function Layout({ title, children, subtitle, requiredPermission }
       label: t('customerView'),
       requiredPermission: 'customer.read' },
     { href: '/import', label: t('import'), requiredPermission: 'import.read' },
+    { href: '/cash', label: t('cash'), requiredPermission: 'nav.read' },
+    { href: '/register', label: t('register'), requiredPermission: 'shares.read' },
+    { href: '/initialize', label: t('initialize'), requiredPermission: 'clients.write' },
     { href: '/settings', label: t('settings'), requiredPermission: 'nav.read' },
   ];
   const visibleNavItems = navItems.filter((item) => !item.requiredPermission || hasPermission(item.requiredPermission));

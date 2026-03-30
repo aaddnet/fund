@@ -56,10 +56,45 @@ from typing import Optional
 class FundCreateRequest(BaseModel):
     name: str
     base_currency: str = "USD"
+    fund_code: Optional[str] = None
+    fund_type: str = "private_equity"
+    status: str = "draft"
+    inception_date: Optional[date] = None
+    hurdle_rate: Optional[Decimal] = None
+    perf_fee_rate: Optional[Decimal] = None
+    perf_fee_frequency: Optional[str] = None
+    subscription_cycle: Optional[str] = None
+    nav_decimal: int = 6
+    share_decimal: int = 6
+    description: Optional[str] = None
 
 class FundUpdateRequest(BaseModel):
     name: Optional[str] = None
     base_currency: Optional[str] = None
+    fund_code: Optional[str] = None
+    fund_type: Optional[str] = None
+    status: Optional[str] = None
+    inception_date: Optional[date] = None
+    first_capital_date: Optional[date] = None
+    hurdle_rate: Optional[Decimal] = None
+    perf_fee_rate: Optional[Decimal] = None
+    perf_fee_frequency: Optional[str] = None
+    subscription_cycle: Optional[str] = None
+    nav_decimal: Optional[int] = None
+    share_decimal: Optional[int] = None
+    description: Optional[str] = None
+
+class SeedCapitalRequest(BaseModel):
+    client_id: int
+    amount_usd: Decimal
+    seed_date: date
+
+class CashPositionUpsertRequest(BaseModel):
+    account_id: int
+    currency: str
+    amount: Decimal
+    snapshot_date: date
+    note: Optional[str] = None
 
 class ClientCreateRequest(BaseModel):
     name: str

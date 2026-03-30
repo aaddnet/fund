@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_db
-from app.models import Account, AssetPrice, AuthUser, Client, ExchangeRate, FeeRecord, Fund, NAVRecord, Position, Transaction
+from app.models import Account, AssetPrice, AuthUser, CashPosition, Client, ClientCapitalAccount, ExchangeRate, FeeRecord, Fund, NAVRecord, Position, ShareRegister, Transaction
 from app.schemas.common import (
     AuthPasswordChangeRequest,
     AuthPasswordResetRequest,
     AuthUserCreateRequest,
     AuthUserUpdateRequest,
+    CashPositionUpsertRequest,
     ClientCreateRequest,
     ClientUpdateRequest,
     AccountCreateRequest,
@@ -28,6 +29,7 @@ from app.schemas.common import (
     PriceFetchRequest,
     RateFetchRequest,
     RateManualRequest,
+    SeedCapitalRequest,
     ShareRequest,
 )
 from app.services.audit import list_audit_logs, record_audit
@@ -488,10 +490,184 @@ def update_fund(fund_id: int, req: FundUpdateRequest, db: Session = Depends(get_
         fund.name = req.name.strip()
     if req.base_currency is not None:
         fund.base_currency = req.base_currency.upper().strip()
+    for field in ("fund_code", "fund_type", "status", "inception_date", "first_capital_date",
+                  "hurdle_rate", "perf_fee_rate", "perf_fee_frequency", "subscription_cycle",
+                  "nav_decimal", "share_decimal", "description"):
+        val = getattr(req, field, None)
+        if val is not None:
+            setattr(fund, field, val)
     db.commit()
     db.refresh(fund)
     record_audit(db, actor, action="fund.update", entity_type="fund", entity_id=str(fund.id), detail={"name": fund.name})
     return _serialize_fund(fund)
+
+
+@router.post("/fund/{fund_id}/seed", status_code=201)
+def seed_fund_capital(fund_id: int, req: SeedCapitalRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.write")
+    from app.models import ShareTransaction as _ShareTx
+    fund = db.query(Fund).filter(Fund.id == fund_id).first()
+    if not fund:
+        raise HTTPException(status_code=404, detail="Fund not found.")
+    client = db.query(Client).filter(Client.id == req.client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found.")
+    seed_nav = Decimal("1.000000")
+    shares_issued = req.amount_usd / seed_nav
+    tx = _ShareTx(
+        fund_id=fund_id,
+        client_id=req.client_id,
+        tx_date=req.seed_date,
+        tx_type="seed",
+        amount_usd=req.amount_usd,
+        shares=shares_issued,
+        nav_at_date=seed_nav,
+    )
+    db.add(tx)
+    db.flush()
+    # Current shares balance for this client in this fund (before seed)
+    existing_balance = db.query(func.sum(_ShareTx.shares)).filter(
+        _ShareTx.fund_id == fund_id, _ShareTx.client_id == req.client_id,
+        _ShareTx.tx_type.in_(["seed", "subscription"]),
+    ).scalar() or Decimal("0")
+    redemptions = db.query(func.sum(_ShareTx.shares)).filter(
+        _ShareTx.fund_id == fund_id, _ShareTx.client_id == req.client_id,
+        _ShareTx.tx_type == "redemption",
+    ).scalar() or Decimal("0")
+    shares_after = Decimal(str(existing_balance)) - Decimal(str(redemptions))
+    register_entry = ShareRegister(
+        fund_id=fund_id,
+        client_id=req.client_id,
+        event_date=req.seed_date,
+        event_type="seed",
+        shares_delta=shares_issued,
+        shares_after=shares_after,
+        nav_per_share=seed_nav,
+        amount_usd=req.amount_usd,
+        ref_share_tx_id=tx.id,
+        note="Seed capital",
+    )
+    db.add(register_entry)
+    fund.total_shares = Decimal(str(fund.total_shares or 0)) + shares_issued
+    if not fund.first_capital_date:
+        fund.first_capital_date = req.seed_date
+    # Upsert capital account
+    capital_acct = db.query(ClientCapitalAccount).filter_by(fund_id=fund_id, client_id=req.client_id).first()
+    if not capital_acct:
+        capital_acct = ClientCapitalAccount(fund_id=fund_id, client_id=req.client_id)
+        db.add(capital_acct)
+    capital_acct.total_invested_usd = Decimal(str(capital_acct.total_invested_usd or 0)) + req.amount_usd
+    capital_acct.current_shares = Decimal(str(capital_acct.current_shares or 0)) + shares_issued
+    capital_acct.avg_cost_nav = seed_nav
+    capital_acct.last_updated_date = req.seed_date
+    db.commit()
+    record_audit(db, actor, action="fund.seed", entity_type="fund", entity_id=str(fund_id),
+                 detail={"client_id": req.client_id, "amount_usd": str(req.amount_usd), "shares": str(shares_issued)})
+    return {"fund_id": fund_id, "client_id": req.client_id, "shares_issued": _decimal(shares_issued),
+            "nav_per_share": _decimal(seed_nav), "amount_usd": _decimal(req.amount_usd), "seed_date": req.seed_date.isoformat()}
+
+
+@router.post("/fund/{fund_id}/activate")
+def activate_fund(fund_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.write")
+    fund = db.query(Fund).filter(Fund.id == fund_id).first()
+    if not fund:
+        raise HTTPException(status_code=404, detail="Fund not found.")
+    fund.status = "active"
+    if not fund.inception_date:
+        from datetime import date as _date
+        fund.inception_date = _date.today()
+    db.commit()
+    db.refresh(fund)
+    record_audit(db, actor, action="fund.activate", entity_type="fund", entity_id=str(fund_id))
+    return _serialize_fund(fund)
+
+
+@router.get("/cash")
+def list_cash_positions(
+    fund_id: Optional[int] = None,
+    account_id: Optional[int] = None,
+    snapshot_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    require_permissions(actor, "nav.read")
+    query = db.query(CashPosition)
+    if account_id:
+        query = query.filter(CashPosition.account_id == account_id)
+    elif fund_id:
+        acct_ids = [r[0] for r in db.query(Account.id).filter(Account.fund_id == fund_id).all()]
+        if acct_ids:
+            query = query.filter(CashPosition.account_id.in_(acct_ids))
+        else:
+            return []
+    if snapshot_date:
+        query = query.filter(CashPosition.snapshot_date == snapshot_date)
+    rows = query.order_by(CashPosition.snapshot_date.desc(), CashPosition.id.desc()).all()
+    return [_serialize_cash(r) for r in rows]
+
+
+@router.post("/cash", status_code=201)
+def upsert_cash_position(req: CashPositionUpsertRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "nav.write")
+    acct = db.query(Account).filter(Account.id == req.account_id).first()
+    if not acct:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    existing = db.query(CashPosition).filter_by(
+        account_id=req.account_id, currency=req.currency.upper(), snapshot_date=req.snapshot_date
+    ).first()
+    if existing:
+        existing.amount = req.amount
+        if req.note is not None:
+            existing.note = req.note
+        db.commit()
+        db.refresh(existing)
+        return _serialize_cash(existing)
+    row = CashPosition(
+        account_id=req.account_id,
+        currency=req.currency.upper(),
+        amount=req.amount,
+        snapshot_date=req.snapshot_date,
+        note=req.note,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _serialize_cash(row)
+
+
+@router.delete("/cash/{cash_id}", status_code=204)
+def delete_cash_position(cash_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "nav.write")
+    row = db.query(CashPosition).filter(CashPosition.id == cash_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Cash position not found.")
+    db.delete(row)
+    db.commit()
+
+
+@router.get("/share/register")
+def list_share_register(
+    fund_id: Optional[int] = None,
+    client_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    require_permissions(actor, "shares.read")
+    query = db.query(ShareRegister)
+    if fund_id:
+        query = query.filter(ShareRegister.fund_id == fund_id)
+    if client_id:
+        query = query.filter(ShareRegister.client_id == client_id)
+    rows = query.order_by(ShareRegister.event_date.asc(), ShareRegister.id.asc()).all()
+    return [_serialize_register_entry(r) for r in rows]
+
+
+@router.get("/client/{client_id}/capital-account")
+def get_client_capital_accounts(client_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.read")
+    rows = db.query(ClientCapitalAccount).filter(ClientCapitalAccount.client_id == client_id).all()
+    return [_serialize_capital_account(r) for r in rows]
 
 
 @router.get("/client")
@@ -949,6 +1125,18 @@ def _serialize_fund(item: Fund) -> dict:
         "name": item.name,
         "base_currency": item.base_currency,
         "total_shares": _decimal(item.total_shares),
+        "fund_code": item.fund_code,
+        "inception_date": _iso(item.inception_date),
+        "first_capital_date": _iso(item.first_capital_date),
+        "fund_type": item.fund_type,
+        "status": item.status,
+        "hurdle_rate": _decimal(item.hurdle_rate),
+        "perf_fee_rate": _decimal(item.perf_fee_rate),
+        "perf_fee_frequency": item.perf_fee_frequency,
+        "subscription_cycle": item.subscription_cycle,
+        "nav_decimal": item.nav_decimal,
+        "share_decimal": item.share_decimal,
+        "description": item.description,
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }
@@ -1332,3 +1520,49 @@ def _aggregate_nav_series(rows: list[dict]) -> list[dict]:
         }
         for row in sorted(rows, key=lambda item: (item.get("nav_date", ""), item.get("fund_id") or 0))
     ]
+
+
+def _serialize_cash(item: CashPosition) -> dict:
+    return {
+        "id": item.id,
+        "account_id": item.account_id,
+        "currency": item.currency,
+        "amount": _decimal(item.amount),
+        "snapshot_date": _iso(item.snapshot_date),
+        "note": item.note,
+        "created_at": _iso(item.created_at),
+        "updated_at": _iso(item.updated_at),
+    }
+
+
+def _serialize_register_entry(item: ShareRegister) -> dict:
+    return {
+        "id": item.id,
+        "fund_id": item.fund_id,
+        "client_id": item.client_id,
+        "event_date": _iso(item.event_date),
+        "event_type": item.event_type,
+        "shares_delta": _decimal(item.shares_delta),
+        "shares_after": _decimal(item.shares_after),
+        "nav_per_share": _decimal(item.nav_per_share),
+        "amount_usd": _decimal(item.amount_usd),
+        "ref_share_tx_id": item.ref_share_tx_id,
+        "note": item.note,
+        "created_at": _iso(item.created_at),
+    }
+
+
+def _serialize_capital_account(item: ClientCapitalAccount) -> dict:
+    return {
+        "id": item.id,
+        "fund_id": item.fund_id,
+        "client_id": item.client_id,
+        "total_invested_usd": _decimal(item.total_invested_usd),
+        "total_redeemed_usd": _decimal(item.total_redeemed_usd),
+        "avg_cost_nav": _decimal(item.avg_cost_nav),
+        "current_shares": _decimal(item.current_shares),
+        "unrealized_pnl_usd": _decimal(item.unrealized_pnl_usd),
+        "last_updated_date": _iso(item.last_updated_date),
+        "created_at": _iso(item.created_at),
+        "updated_at": _iso(item.updated_at),
+    }

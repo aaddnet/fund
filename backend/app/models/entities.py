@@ -29,6 +29,18 @@ class Fund(Base, TimestampMixin):
     name = Column(String(255), nullable=False)
     base_currency = Column(String(10), nullable=False, default="USD")
     total_shares = Column(Numeric(20, 6), nullable=False, default=0)
+    fund_code = Column(String(20))
+    inception_date = Column(Date)
+    first_capital_date = Column(Date)
+    fund_type = Column(String(50), nullable=False, default="private_equity")
+    status = Column(String(20), nullable=False, default="draft")
+    hurdle_rate = Column(Numeric(8, 4))
+    perf_fee_rate = Column(Numeric(8, 4))
+    perf_fee_frequency = Column(String(20))
+    subscription_cycle = Column(String(20))
+    nav_decimal = Column(Integer, nullable=False, default=6)
+    share_decimal = Column(Integer, nullable=False, default=6)
+    description = Column(Text)
 
 
 class Client(Base, TimestampMixin):
@@ -144,6 +156,8 @@ class NAVRecord(Base, TimestampMixin):
     total_shares = Column(Numeric(24, 8), nullable=False)
     nav_per_share = Column(Numeric(24, 8), nullable=False)
     is_locked = Column(Boolean, nullable=False, default=False)
+    cash_total_usd = Column(Numeric(24, 8))
+    positions_total_usd = Column(Numeric(24, 8))
 
 
 class AssetSnapshot(Base, TimestampMixin):
@@ -279,3 +293,44 @@ class AuthSession(Base, TimestampMixin):
     revoked_at = Column(DateTime(timezone=True))
     last_seen_at = Column(DateTime(timezone=True))
     refreshed_at = Column(DateTime(timezone=True))
+
+
+class CashPosition(Base, TimestampMixin):
+    __tablename__ = "cash_position"
+    __table_args__ = (UniqueConstraint("account_id", "currency", "snapshot_date", name="uq_cash_position_account_currency_date"),)
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
+    currency = Column(String(10), nullable=False)
+    amount = Column(Numeric(24, 8), nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    note = Column(String(255))
+
+
+class ShareRegister(Base, TimestampMixin):
+    __tablename__ = "share_register"
+    __table_args__ = (Index("idx_share_register_fund_client", "fund_id", "client_id"),)
+    id = Column(Integer, primary_key=True)
+    fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
+    client_id = Column(Integer, ForeignKey("client.id"), nullable=False)
+    event_date = Column(Date, nullable=False)
+    event_type = Column(String(30), nullable=False)
+    shares_delta = Column(Numeric(24, 8), nullable=False)
+    shares_after = Column(Numeric(24, 8), nullable=False)
+    nav_per_share = Column(Numeric(24, 8), nullable=False)
+    amount_usd = Column(Numeric(24, 8))
+    ref_share_tx_id = Column(Integer, ForeignKey("share_transaction.id"))
+    note = Column(String(255))
+
+
+class ClientCapitalAccount(Base, TimestampMixin):
+    __tablename__ = "client_capital_account"
+    __table_args__ = (UniqueConstraint("fund_id", "client_id", name="uq_client_capital_account_fund_client"),)
+    id = Column(Integer, primary_key=True)
+    fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
+    client_id = Column(Integer, ForeignKey("client.id"), nullable=False)
+    total_invested_usd = Column(Numeric(24, 8), nullable=False, default=0)
+    total_redeemed_usd = Column(Numeric(24, 8), nullable=False, default=0)
+    avg_cost_nav = Column(Numeric(24, 8))
+    current_shares = Column(Numeric(24, 8), nullable=False, default=0)
+    unrealized_pnl_usd = Column(Numeric(24, 8))
+    last_updated_date = Column(Date)

@@ -9,7 +9,7 @@ getcontext().prec = 28
 
 from sqlalchemy.orm import Session
 
-from app.models import Account, AssetPrice, AssetSnapshot, ExchangeRate, Fund, NAVRecord, Position
+from app.models import Account, AssetPrice, AssetSnapshot, CashPosition, ExchangeRate, Fund, NAVRecord, Position
 
 USD = "USD"
 ZERO = Decimal("0")
@@ -87,6 +87,17 @@ def calc_nav(db: Session, fund_id: int, nav_date):
             bucket["price_usd"] = bucket["value_usd"] / bucket["quantity"]
         bucket["fx_rate_to_usd"] = valuation["fx_rate_to_usd"]
 
+    # Include cash positions in total assets
+    cash_rows = db.query(CashPosition).filter(
+        CashPosition.account_id.in_(account_ids),
+        CashPosition.snapshot_date == nav_date,
+    ).all()
+    cash_total = ZERO
+    for cr in cash_rows:
+        cash_total += _resolve_rate_to_usd(cr.currency.upper(), rate_map) * Decimal(str(cr.amount))
+    positions_total = total_assets_usd
+    total_assets_usd += cash_total
+
     total_shares = Decimal(str(fund.total_shares or 0))
     if total_shares <= ZERO:
         # V1 允许先算出总资产，再由后续 share 流程逐步补齐份额。
@@ -100,6 +111,8 @@ def calc_nav(db: Session, fund_id: int, nav_date):
         total_shares=total_shares,
         nav_per_share=nav_per_share,
         is_locked=True,
+        cash_total_usd=cash_total,
+        positions_total_usd=positions_total,
     )
     db.add(nav)
     db.flush()

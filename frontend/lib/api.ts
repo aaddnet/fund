@@ -50,6 +50,58 @@ export type Fund = {
   name: string;
   base_currency: string;
   total_shares: number;
+  fund_code?: string | null;
+  inception_date?: string | null;
+  first_capital_date?: string | null;
+  fund_type?: string | null;
+  status?: string | null;
+  hurdle_rate?: number | null;
+  perf_fee_rate?: number | null;
+  perf_fee_frequency?: string | null;
+  subscription_cycle?: string | null;
+  nav_decimal?: number;
+  share_decimal?: number;
+  description?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CashPosition = {
+  id: number;
+  account_id: number;
+  currency: string;
+  amount: number;
+  snapshot_date: string;
+  note?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type ShareRegisterEntry = {
+  id: number;
+  fund_id: number;
+  client_id: number;
+  event_date: string;
+  event_type: string;
+  shares_delta: number;
+  shares_after: number;
+  nav_per_share: number;
+  amount_usd?: number | null;
+  ref_share_tx_id?: number | null;
+  note?: string | null;
+  created_at?: string | null;
+};
+
+export type CapitalAccount = {
+  id: number;
+  fund_id: number;
+  client_id: number;
+  total_invested_usd: number;
+  total_redeemed_usd: number;
+  avg_cost_nav?: number | null;
+  current_shares: number;
+  unrealized_pnl_usd?: number | null;
+  last_updated_date?: string | null;
 };
 
 export type Client = {
@@ -599,6 +651,34 @@ export async function unlockAuthUser(userId: number) {
 
 export async function changeMyPassword(data: { current_password: string; new_password: string }) {
   return fetchJson<AuthUser>('/auth/me/password', { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function getCashPositions(params?: { fundId?: number; accountId?: number; snapshotDate?: string; accessToken?: string | null }) {
+  return fetchJson<CashPosition[]>(`/cash${buildQuery({ fund_id: params?.fundId, account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`, { accessToken: params?.accessToken });
+}
+
+export async function upsertCashPosition(payload: { account_id: number; currency: string; amount: number; snapshot_date: string; note?: string | null }) {
+  return fetchJson<CashPosition>('/cash', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function deleteCashPosition(cashId: number) {
+  return fetchJson<void>(`/cash/${cashId}`, { method: 'DELETE' });
+}
+
+export async function getShareRegister(params?: { fundId?: number; clientId?: number; accessToken?: string | null }) {
+  return fetchJson<ShareRegisterEntry[]>(`/share/register${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId })}`, { accessToken: params?.accessToken });
+}
+
+export async function getClientCapitalAccounts(clientId: number, accessToken?: string | null) {
+  return fetchJson<CapitalAccount[]>(`/client/${clientId}/capital-account`, { accessToken });
+}
+
+export async function createSeedCapital(fundId: number, payload: { client_id: number; amount_usd: number; seed_date: string }) {
+  return fetchJson<{ fund_id: number; client_id: number; shares_issued: number; nav_per_share: number; amount_usd: number; seed_date: string }>(`/fund/${fundId}/seed`, { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function activateFund(fundId: number) {
+  return fetchJson<Fund>(`/fund/${fundId}/activate`, { method: 'POST' });
 }
 
 export { API_BASE, PUBLIC_API_BASE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, LOCALE_COOKIE, buildQuery, fetchJson };
