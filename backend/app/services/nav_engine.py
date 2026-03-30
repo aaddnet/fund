@@ -24,7 +24,6 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
         return existing
     if existing and force:
         # Delete stale record and its asset snapshots before recalculating
-        from app.models import AssetSnapshot
         db.query(AssetSnapshot).filter(AssetSnapshot.nav_record_id == existing.id).delete()
         db.delete(existing)
         db.flush()
