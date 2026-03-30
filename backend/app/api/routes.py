@@ -260,7 +260,7 @@ def list_price_records(
 def run_nav(req: NavCalcRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "nav.write")
     try:
-        row = calc_nav(db, req.fund_id, req.nav_date)
+        row = calc_nav(db, req.fund_id, req.nav_date, force=req.force)
         record_audit(
             db,
             actor,
@@ -361,6 +361,45 @@ def share_balances(
     return balances(db, fund_id=fund_id, client_id=client_id)
 
 
+@router.patch("/share/transaction/{tx_id}")
+def update_share_transaction(tx_id: int, req: dict, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "shares.write")
+    if actor.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can edit share transactions.")
+    from app.models import ShareTransaction as _ShareTx
+    tx = db.query(_ShareTx).filter(_ShareTx.id == tx_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Share transaction not found.")
+    allowed = {"tx_date", "tx_type", "amount_usd", "shares", "nav_at_date", "fund_id", "client_id"}
+    for key, val in req.items():
+        if key in allowed:
+            setattr(tx, key, val)
+    db.commit()
+    db.refresh(tx)
+    record_audit(db, actor, action="share_tx.update", entity_type="share_transaction", entity_id=str(tx.id), detail=req)
+    return {
+        "id": tx.id, "fund_id": tx.fund_id, "client_id": tx.client_id,
+        "tx_date": tx.tx_date.isoformat(), "tx_type": tx.tx_type,
+        "amount_usd": _decimal(tx.amount_usd), "shares": _decimal(tx.shares),
+        "nav_at_date": _decimal(tx.nav_at_date),
+    }
+
+
+@router.delete("/share/transaction/{tx_id}", status_code=204)
+def delete_share_transaction(tx_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "shares.write")
+    if actor.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can delete share transactions.")
+    from app.models import ShareTransaction as _ShareTx
+    tx = db.query(_ShareTx).filter(_ShareTx.id == tx_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Share transaction not found.")
+    record_audit(db, actor, action="share_tx.delete", entity_type="share_transaction", entity_id=str(tx.id),
+                 detail={"fund_id": tx.fund_id, "tx_type": tx.tx_type, "amount_usd": str(tx.amount_usd), "shares": str(tx.shares)})
+    db.delete(tx)
+    db.commit()
+
+
 @router.post("/fee/calc")
 def fee(req: FeeCalcRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "fees.write")
@@ -386,9 +425,12 @@ def fee_list(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
 
 
 @router.get("/import")
-def get_import_batches(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+def get_import_batches(account_id: Optional[int] = None, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "import.read")
-    return [serialize_batch(batch) for batch in list_batches(db)]
+    batches = list_batches(db)
+    if account_id is not None:
+        batches = [b for b in batches if b.account_id == account_id]
+    return [serialize_batch(batch) for batch in batches]
 
 
 @router.get("/import/{batch_id}")
@@ -473,6 +515,8 @@ def get_fund(fund_id: int, db: Session = Depends(get_db), actor: Actor = Depends
 def create_fund(req: FundCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "clients.write")
     fund = Fund(name=req.name.strip(), base_currency=req.base_currency.upper().strip())
+    if req.total_shares is not None:
+        fund.total_shares = req.total_shares
     db.add(fund)
     db.commit()
     db.refresh(fund)
@@ -490,7 +534,7 @@ def update_fund(fund_id: int, req: FundUpdateRequest, db: Session = Depends(get_
         fund.name = req.name.strip()
     if req.base_currency is not None:
         fund.base_currency = req.base_currency.upper().strip()
-    for field in ("fund_code", "fund_type", "status", "inception_date", "first_capital_date",
+    for field in ("total_shares", "fund_code", "fund_type", "status", "inception_date", "first_capital_date",
                   "hurdle_rate", "perf_fee_rate", "perf_fee_frequency", "subscription_cycle",
                   "nav_decimal", "share_decimal", "description"):
         val = getattr(req, field, None)
@@ -509,9 +553,12 @@ def seed_fund_capital(fund_id: int, req: SeedCapitalRequest, db: Session = Depen
     fund = db.query(Fund).filter(Fund.id == fund_id).first()
     if not fund:
         raise HTTPException(status_code=404, detail="Fund not found.")
-    client = db.query(Client).filter(Client.id == req.client_id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
+    # Client is optional for seed capital
+    client = None
+    if req.client_id:
+        client = db.query(Client).filter(Client.id == req.client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found.")
     seed_nav = Decimal("1.000000")
     shares_issued = Decimal(str(req.shares_override)) if req.shares_override else req.amount_usd / seed_nav
     tx = _ShareTx(
@@ -526,15 +573,17 @@ def seed_fund_capital(fund_id: int, req: SeedCapitalRequest, db: Session = Depen
     db.add(tx)
     db.flush()
     # Current shares balance for this client in this fund (before seed)
-    existing_balance = db.query(func.sum(_ShareTx.shares)).filter(
-        _ShareTx.fund_id == fund_id, _ShareTx.client_id == req.client_id,
-        _ShareTx.tx_type.in_(["seed", "subscription"]),
-    ).scalar() or Decimal("0")
-    redemptions = db.query(func.sum(_ShareTx.shares)).filter(
-        _ShareTx.fund_id == fund_id, _ShareTx.client_id == req.client_id,
-        _ShareTx.tx_type == "redemption",
-    ).scalar() or Decimal("0")
-    shares_after = Decimal(str(existing_balance)) - Decimal(str(redemptions))
+    shares_after = shares_issued
+    if req.client_id:
+        existing_balance = db.query(func.sum(_ShareTx.shares)).filter(
+            _ShareTx.fund_id == fund_id, _ShareTx.client_id == req.client_id,
+            _ShareTx.tx_type.in_(["seed", "subscription"]),
+        ).scalar() or Decimal("0")
+        redemptions = db.query(func.sum(_ShareTx.shares)).filter(
+            _ShareTx.fund_id == fund_id, _ShareTx.client_id == req.client_id,
+            _ShareTx.tx_type == "redemption",
+        ).scalar() or Decimal("0")
+        shares_after = Decimal(str(existing_balance)) - Decimal(str(redemptions))
     register_entry = ShareRegister(
         fund_id=fund_id,
         client_id=req.client_id,
@@ -551,15 +600,16 @@ def seed_fund_capital(fund_id: int, req: SeedCapitalRequest, db: Session = Depen
     fund.total_shares = Decimal(str(fund.total_shares or 0)) + shares_issued
     if not fund.first_capital_date:
         fund.first_capital_date = req.seed_date
-    # Upsert capital account
-    capital_acct = db.query(ClientCapitalAccount).filter_by(fund_id=fund_id, client_id=req.client_id).first()
-    if not capital_acct:
-        capital_acct = ClientCapitalAccount(fund_id=fund_id, client_id=req.client_id)
-        db.add(capital_acct)
-    capital_acct.total_invested_usd = Decimal(str(capital_acct.total_invested_usd or 0)) + req.amount_usd
-    capital_acct.current_shares = Decimal(str(capital_acct.current_shares or 0)) + shares_issued
-    capital_acct.avg_cost_nav = seed_nav
-    capital_acct.last_updated_date = req.seed_date
+    # Upsert capital account (only if client specified)
+    if req.client_id:
+        capital_acct = db.query(ClientCapitalAccount).filter_by(fund_id=fund_id, client_id=req.client_id).first()
+        if not capital_acct:
+            capital_acct = ClientCapitalAccount(fund_id=fund_id, client_id=req.client_id)
+            db.add(capital_acct)
+        capital_acct.total_invested_usd = Decimal(str(capital_acct.total_invested_usd or 0)) + req.amount_usd
+        capital_acct.current_shares = Decimal(str(capital_acct.current_shares or 0)) + shares_issued
+        capital_acct.avg_cost_nav = seed_nav
+        capital_acct.last_updated_date = req.seed_date
     db.commit()
     record_audit(db, actor, action="fund.seed", entity_type="fund", entity_id=str(fund_id),
                  detail={"client_id": req.client_id, "amount_usd": str(req.amount_usd), "shares": str(shares_issued)})
@@ -663,6 +713,38 @@ def list_share_register(
     return [_serialize_register_entry(r) for r in rows]
 
 
+@router.patch("/share/register/{entry_id}")
+def update_share_register_entry(entry_id: int, req: dict, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.write")
+    if actor.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can edit register entries.")
+    entry = db.query(ShareRegister).filter(ShareRegister.id == entry_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Register entry not found.")
+    allowed = {"event_date", "event_type", "shares_delta", "shares_after", "nav_per_share", "amount_usd", "note", "client_id"}
+    for key, val in req.items():
+        if key in allowed:
+            setattr(entry, key, val)
+    db.commit()
+    db.refresh(entry)
+    record_audit(db, actor, action="share_register.update", entity_type="share_register", entity_id=str(entry.id), detail=req)
+    return _serialize_register_entry(entry)
+
+
+@router.delete("/share/register/{entry_id}", status_code=204)
+def delete_share_register_entry(entry_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "clients.write")
+    if actor.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can delete register entries.")
+    entry = db.query(ShareRegister).filter(ShareRegister.id == entry_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Register entry not found.")
+    record_audit(db, actor, action="share_register.delete", entity_type="share_register", entity_id=str(entry.id),
+                 detail={"fund_id": entry.fund_id, "event_type": entry.event_type, "shares_delta": str(entry.shares_delta)})
+    db.delete(entry)
+    db.commit()
+
+
 @router.get("/client/{client_id}/capital-account")
 def get_client_capital_accounts(client_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "clients.read")
@@ -684,7 +766,8 @@ def list_clients(
     if actor.role == ROLE_CLIENT_READONLY:
         query = query.filter(Client.id == actor.client_scope_id)
     if fund_id is not None:
-        query = query.join(Account, Account.client_id == Client.id).filter(Account.fund_id == fund_id).distinct()
+        from app.models import ShareTransaction as _ShareTx
+        query = query.join(_ShareTx, _ShareTx.client_id == Client.id).filter(_ShareTx.fund_id == fund_id).distinct()
     if q:
         like = f"%{q.strip()}%"
         query = query.filter((Client.name.ilike(like)) | (Client.email.ilike(like)))
@@ -734,24 +817,23 @@ def list_accounts(
     page: int = Query(DEFAULT_PAGE, ge=1),
     size: int = Query(DEFAULT_SIZE, ge=1, le=MAX_SIZE),
     fund_id: Optional[int] = None,
-    client_id: Optional[int] = None,
+    holder: Optional[str] = None,
     broker: Optional[str] = None,
     q: Optional[str] = None,
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
     require_permissions(actor, "accounts.read")
-    fund_id, client_id = apply_client_scope_filters(actor, fund_id, client_id)
     query = db.query(Account)
     if fund_id is not None:
         query = query.filter(Account.fund_id == fund_id)
-    if client_id is not None:
-        query = query.filter(Account.client_id == client_id)
+    if holder:
+        query = query.filter(Account.holder_name.ilike(f"%{holder.strip()}%"))
     if broker:
         query = query.filter(Account.broker.ilike(f"%{broker.strip()}%"))
     if q:
         like = f"%{q.strip()}%"
-        query = query.filter((Account.account_no.ilike(like)) | (Account.broker.ilike(like)))
+        query = query.filter((Account.account_no.ilike(like)) | (Account.broker.ilike(like)) | (Account.holder_name.ilike(like)))
     return _paginate(query.order_by(Account.id.asc()), page, size, lambda item: _serialize_account(db, item))
 
 
@@ -761,14 +843,13 @@ def get_account(account_id: int, db: Session = Depends(get_db), actor: Actor = D
     item = db.query(Account).filter(Account.id == account_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Account not found.")
-    require_client_scope(actor, item.client_id)
     return _serialize_account(db, item)
 
 
 @router.post("/account")
 def create_account(req: AccountCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "accounts.write")
-    account = Account(fund_id=req.fund_id, client_id=req.client_id, broker=req.broker, account_no=req.account_no)
+    account = Account(fund_id=req.fund_id, holder_name=req.holder_name, broker=req.broker, account_no=req.account_no)
     db.add(account)
     db.commit()
     db.refresh(account)
@@ -782,11 +863,10 @@ def update_account(account_id: int, req: AccountUpdateRequest, db: Session = Dep
     item = db.query(Account).filter(Account.id == account_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Account not found.")
-    require_client_scope(actor, item.client_id)
     if req.fund_id is not None:
         item.fund_id = req.fund_id
-    if 'client_id' in req.model_fields_set:
-        item.client_id = req.client_id
+    if 'holder_name' in req.model_fields_set:
+        item.holder_name = req.holder_name
     if req.broker is not None:
         item.broker = req.broker
     if req.account_no is not None:
@@ -815,10 +895,10 @@ def list_positions(
     if account_id is not None:
         account = db.query(Account).filter(Account.id == account_id).first()
         if account:
-            require_client_scope(actor, account.client_id)
-        query = query.filter(Position.account_id == account_id)
+            query = query.filter(Position.account_id == account_id)
     elif actor.role == ROLE_CLIENT_READONLY:
-        query = query.join(Account, Account.id == Position.account_id).filter(Account.client_id == actor.client_scope_id)
+        # Accounts no longer link to clients; client-scoped users see all positions
+        pass
     if snapshot_date is not None:
         query = query.filter(Position.snapshot_date == snapshot_date)
     if asset_code:
@@ -832,9 +912,6 @@ def get_position(position_id: int, db: Session = Depends(get_db), actor: Actor =
     item = db.query(Position).filter(Position.id == position_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Position not found.")
-    account = db.query(Account).filter(Account.id == item.account_id).first()
-    if account:
-        require_client_scope(actor, account.client_id)
     return _serialize_position(item)
 
 
@@ -856,10 +933,10 @@ def list_transactions(
     if account_id is not None:
         account = db.query(Account).filter(Account.id == account_id).first()
         if account:
-            require_client_scope(actor, account.client_id)
-        query = query.filter(Transaction.account_id == account_id)
+            query = query.filter(Transaction.account_id == account_id)
     elif actor.role == ROLE_CLIENT_READONLY:
-        query = query.join(Account, Account.id == Transaction.account_id).filter(Account.client_id == actor.client_scope_id)
+        # Accounts no longer link to clients; client-scoped users see all transactions
+        pass
     if trade_date is not None:
         query = query.filter(Transaction.trade_date == trade_date)
     if import_batch_id is not None:
@@ -873,9 +950,6 @@ def get_transaction(transaction_id: int, db: Session = Depends(get_db), actor: A
     item = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Transaction not found.")
-    account = db.query(Account).filter(Account.id == item.account_id).first()
-    if account:
-        require_client_scope(actor, account.client_id)
     return _serialize_transaction(item)
 
 
@@ -887,8 +961,8 @@ def get_customer_view(client_id: int, db: Session = Depends(get_db), actor: Acto
     if not client:
         raise HTTPException(status_code=404, detail="Client not found.")
 
-    account_rows = db.query(Account).filter(Account.client_id == client_id).order_by(Account.id.asc()).all()
-    fund_ids = sorted({account.fund_id for account in account_rows})
+    account_rows = []  # Accounts no longer link to clients
+    fund_ids = _client_fund_ids(db, client_id)
     share_balance_rows = balances(db, client_id=client_id)
     share_history_rows = history(db, client_id=client_id)
     nav_rows = [_serialize_nav(item, db) for item in list_nav(db)]
@@ -935,13 +1009,9 @@ def get_reports_overview(
         fee_rows = [_serialize_fee(item) for item in fee_query.order_by(FeeRecord.fee_date.desc(), FeeRecord.id.desc()).all()]
 
     transaction_query = db.query(Transaction).filter(and_(Transaction.trade_date >= start_date, Transaction.trade_date <= end_date))
-    transaction_query = transaction_query.join(Account, Account.id == Transaction.account_id)
     if fund_id is not None:
-        transaction_query = transaction_query.filter(Account.fund_id == fund_id)
-    if client_id is not None:
-        transaction_query = transaction_query.filter(Account.client_id == client_id)
-    elif actor.role == ROLE_CLIENT_READONLY:
-        transaction_query = transaction_query.filter(Account.client_id == actor.client_scope_id)
+        transaction_query = transaction_query.join(Account, Account.id == Transaction.account_id).filter(Account.fund_id == fund_id)
+    # client_id / client-scope filtering no longer possible via Account (no client_id FK)
     transaction_rows = [_serialize_transaction(item) for item in transaction_query.order_by(Transaction.trade_date.desc(), Transaction.id.desc()).all()]
 
     subscribe_amount = sum(item["amount_usd"] for item in share_rows if item["tx_type"] == "subscribe")
@@ -1021,14 +1091,8 @@ def export_reports(
         fee_rows = [_serialize_fee(item) for item in fee_query.order_by(FeeRecord.fee_date.asc()).all()]
 
     transaction_query = db.query(Transaction).filter(and_(Transaction.trade_date >= start_date, Transaction.trade_date <= end_date))
-    if fund_id is not None or client_id is not None or actor.role == ROLE_CLIENT_READONLY:
-        transaction_query = transaction_query.join(Account, Account.id == Transaction.account_id)
-        if fund_id is not None:
-            transaction_query = transaction_query.filter(Account.fund_id == fund_id)
-        if client_id is not None:
-            transaction_query = transaction_query.filter(Account.client_id == client_id)
-        elif actor.role == ROLE_CLIENT_READONLY:
-            transaction_query = transaction_query.filter(Account.client_id == actor.client_scope_id)
+    if fund_id is not None:
+        transaction_query = transaction_query.join(Account, Account.id == Transaction.account_id).filter(Account.fund_id == fund_id)
     transaction_rows = [_serialize_transaction(item) for item in transaction_query.order_by(Transaction.trade_date.asc()).all()]
 
     output = io.StringIO()
@@ -1105,9 +1169,11 @@ def trigger_scheduler_job(db: Session = Depends(get_db), actor: Actor = Depends(
 
 
 def _client_fund_ids(db: Session, client_id: Optional[int]) -> list[int]:
+    """Get fund IDs where this client has share transactions."""
     if client_id is None:
         return []
-    return sorted({row[0] for row in db.query(Account.fund_id).filter(Account.client_id == client_id).all()})
+    from app.models import ShareTransaction as _ShareTx
+    return sorted({row[0] for row in db.query(_ShareTx.fund_id).filter(_ShareTx.client_id == client_id).distinct().all()})
 
 
 def _paginate(query, page: int, size: int, serializer):
@@ -1144,12 +1210,11 @@ def _serialize_fund(item: Fund) -> dict:
 
 def _serialize_client(db: Session, item: Client) -> dict:
     from decimal import Decimal as _D
-    account_rows = db.query(Account).filter(Account.client_id == item.id).all()
-    fund_ids = sorted({account.fund_id for account in account_rows})
+    from app.models import ShareTransaction as _ShareTx
     share_balance_rows = balances(db, client_id=item.id)
     total_share_balance = sum(row["share_balance"] for row in share_balance_rows)
+    fund_ids = sorted({row["fund_id"] for row in share_balance_rows})
     share_history_rows = history(db, client_id=item.id)
-    latest_tx_date = db.query(func.max(Transaction.trade_date)).join(Account, Account.id == Transaction.account_id).filter(Account.client_id == item.id).scalar()
     latest_share_event_date = share_history_rows[0]["tx_date"] if share_history_rows else None
 
     # Compute holding value: shares × latest locked NAV per share, per fund
@@ -1167,14 +1232,12 @@ def _serialize_client(db: Session, item: Client) -> dict:
         "id": item.id,
         "name": item.name,
         "email": item.email,
-        "account_count": len(account_rows),
         "fund_count": len(fund_ids),
         "fund_ids": fund_ids,
         "total_share_balance": total_share_balance,
         "total_holding_value_usd": float(total_holding_usd),
         "holding_currency": "USD",
         "share_tx_count": len(share_history_rows),
-        "latest_trade_date": latest_tx_date.isoformat() if latest_tx_date else None,
         "latest_share_tx_date": latest_share_event_date,
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
@@ -1187,7 +1250,6 @@ def _serialize_account(db: Session, item: Account) -> dict:
     transaction_count = db.query(func.count(Transaction.id)).filter(Transaction.account_id == item.id).scalar() or 0
     latest_trade_date = db.query(func.max(Transaction.trade_date)).filter(Transaction.account_id == item.id).scalar()
     fund = db.query(Fund).filter(Fund.id == item.fund_id).first()
-    client = db.query(Client).filter(Client.id == item.client_id).first() if item.client_id else None
 
     # Snapshot cost-basis value (quantity × average_cost) for latest snapshot date
     latest_snapshot_value_usd = None
@@ -1206,8 +1268,7 @@ def _serialize_account(db: Session, item: Account) -> dict:
         "id": item.id,
         "fund_id": item.fund_id,
         "fund_name": fund.name if fund else None,
-        "client_id": item.client_id,
-        "client_name": client.name if client else None,
+        "holder_name": item.holder_name,
         "broker": item.broker,
         "account_no": item.account_no,
         "position_count": int(position_count),

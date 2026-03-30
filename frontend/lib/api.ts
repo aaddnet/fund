@@ -123,8 +123,7 @@ export type Account = {
   id: number;
   fund_id: number;
   fund_name?: string | null;
-  client_id?: number | null;
-  client_name?: string | null;
+  holder_name?: string | null;
   broker: string;
   account_no: string;
   position_count: number;
@@ -507,8 +506,8 @@ export async function getFees(accessToken?: string | null) {
   return fetchJson<FeeRecord[]>('/fee', { accessToken });
 }
 
-export async function getImportBatches(accessToken?: string | null) {
-  return fetchJson<ImportBatch[]>('/import', { accessToken });
+export async function getImportBatches(params?: { accountId?: number; accessToken?: string | null }) {
+  return fetchJson<ImportBatch[]>(`/import${buildQuery({ account_id: params?.accountId })}`, { accessToken: params?.accessToken });
 }
 
 export async function getImportBatch(batchId: number, accessToken?: string | null) {
@@ -519,11 +518,11 @@ export async function getFunds(page = 1, size = 50, accessToken?: string | null)
   return fetchJson<ApiListResponse<Fund>>(`/fund${buildQuery({ page, size })}`, { accessToken });
 }
 
-export async function createFund(data: { name: string; base_currency?: string }) {
+export async function createFund(data: { name: string; base_currency?: string; total_shares?: number }) {
   return fetchJson<Fund>('/fund', { method: 'POST', body: JSON.stringify(data) });
 }
 
-export async function updateFund(fundId: number, data: { name?: string; base_currency?: string }) {
+export async function updateFund(fundId: number, data: { name?: string; base_currency?: string; total_shares?: number; [key: string]: any }) {
   return fetchJson<Fund>(`/fund/${fundId}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 
@@ -535,8 +534,8 @@ export async function getClient(clientId: number, accessToken?: string | null) {
   return fetchJson<Client>(`/client/${clientId}`, { accessToken });
 }
 
-export async function getAccounts(params?: { page?: number; size?: number; fundId?: number; clientId?: number; broker?: string; q?: string; accessToken?: string | null }) {
-  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, client_id: params?.clientId, broker: params?.broker, q: params?.q })}`, { accessToken: params?.accessToken });
+export async function getAccounts(params?: { page?: number; size?: number; fundId?: number; holder?: string; broker?: string; q?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, holder: params?.holder, broker: params?.broker, q: params?.q })}`, { accessToken: params?.accessToken });
 }
 
 export async function getAccount(accountId: number, accessToken?: string | null) {
@@ -576,7 +575,7 @@ export async function confirmImportBatch(batchId: number) {
   });
 }
 
-export async function createNav(payload: { fund_id: number; nav_date: string }) {
+export async function createNav(payload: { fund_id: number; nav_date: string; force?: boolean }) {
   return fetchJson<NavRecord>('/nav/calc', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -601,6 +600,14 @@ export async function createShareRedemption(payload: { fund_id: number; client_i
   });
 }
 
+export async function updateShareTransaction(txId: number, data: Record<string, any>) {
+  return fetchJson<ShareTransaction>(`/share/transaction/${txId}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteShareTransaction(txId: number) {
+  return fetchJson<void>(`/share/transaction/${txId}`, { method: 'DELETE' });
+}
+
 export async function createClient(payload: { name: string; email?: string | null }) {
   return fetchJson<Client>('/client', {
     method: 'POST',
@@ -615,14 +622,14 @@ export async function updateClient(clientId: number, payload: { name?: string | 
   });
 }
 
-export async function createAccount(payload: { fund_id: number; client_id: number; broker: string; account_no: string }) {
+export async function createAccount(payload: { fund_id: number; holder_name?: string; broker: string; account_no: string }) {
   return fetchJson<Account>('/account', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
 }
 
-export async function updateAccount(accountId: number, payload: { fund_id?: number | null; client_id?: number | null; broker?: string | null; account_no?: string | null }) {
+export async function updateAccount(accountId: number, payload: { fund_id?: number | null; holder_name?: string | null; broker?: string | null; account_no?: string | null }) {
   return fetchJson<Account>(`/account/${accountId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
@@ -669,12 +676,20 @@ export async function getShareRegister(params?: { fundId?: number; clientId?: nu
   return fetchJson<ShareRegisterEntry[]>(`/share/register${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId })}`, { accessToken: params?.accessToken });
 }
 
+export async function updateShareRegisterEntry(entryId: number, data: Record<string, any>) {
+  return fetchJson<ShareRegisterEntry>(`/share/register/${entryId}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteShareRegisterEntry(entryId: number) {
+  return fetchJson<void>(`/share/register/${entryId}`, { method: 'DELETE' });
+}
+
 export async function getClientCapitalAccounts(clientId: number, accessToken?: string | null) {
   return fetchJson<CapitalAccount[]>(`/client/${clientId}/capital-account`, { accessToken });
 }
 
-export async function createSeedCapital(fundId: number, payload: { client_id: number; amount_usd: number; seed_date: string }) {
-  return fetchJson<{ fund_id: number; client_id: number; shares_issued: number; nav_per_share: number; amount_usd: number; seed_date: string }>(`/fund/${fundId}/seed`, { method: 'POST', body: JSON.stringify(payload) });
+export async function createSeedCapital(fundId: number, payload: { client_id?: number; amount_usd: number; seed_date: string; shares_override?: number }) {
+  return fetchJson<{ fund_id: number; client_id: number | null; shares_issued: number; nav_per_share: number; amount_usd: number; seed_date: string }>(`/fund/${fundId}/seed`, { method: 'POST', body: JSON.stringify(payload) });
 }
 
 export async function activateFund(fundId: number) {

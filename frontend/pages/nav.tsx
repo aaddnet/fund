@@ -27,6 +27,7 @@ export default function Page({ nav, funds, error }: Props) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [fundId, setFundId] = useState(defaultFundId);
   const [navDate, setNavDate] = useState('2026-06-30');
+  const [forceRecalc, setForceRecalc] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const fundMap = useMemo(() => Object.fromEntries(funds.map(f => [f.id, f.name])), [funds]);
 
@@ -50,7 +51,7 @@ export default function Page({ nav, funds, error }: Props) {
     }
     setSubmitting(true);
     try {
-      const created = await createNav({ fund_id: Number(fundId), nav_date: navDate });
+      const created = await createNav({ fund_id: Number(fundId), nav_date: navDate, force: forceRecalc });
       setRows((current) => {
         const merged = [created, ...current.filter((item) => item.id !== created.id)];
         return merged.sort((a, b) => b.nav_date.localeCompare(a.nav_date));
@@ -122,6 +123,10 @@ export default function Page({ nav, funds, error }: Props) {
           <FormField label={t('navDate')}>
             <input style={styles.input} type='date' value={navDate} onChange={(event) => setNavDate(event.target.value)} disabled={submitting} />
           </FormField>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input type='checkbox' checked={forceRecalc} onChange={e => setForceRecalc(e.target.checked)} disabled={submitting} />
+            {t('forceRecalc')}
+          </label>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
             <button type="button" onClick={() => setIsModalOpen(false)} style={styles.buttonSecondary} disabled={submitting}>Cancel</button>
             <button style={styles.buttonPrimary} disabled={submitting} type='submit'>

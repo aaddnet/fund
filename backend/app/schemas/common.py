@@ -38,6 +38,7 @@ class PriceFetchRequest(BaseModel):
 class NavCalcRequest(BaseModel):
     fund_id: int
     nav_date: date
+    force: bool = False
 
 
 class ShareRequest(BaseModel):
@@ -56,6 +57,7 @@ from typing import Optional
 class FundCreateRequest(BaseModel):
     name: str
     base_currency: str = "USD"
+    total_shares: Optional[Decimal] = None
     fund_code: Optional[str] = None
     fund_type: str = "private_equity"
     status: str = "draft"
@@ -71,6 +73,7 @@ class FundCreateRequest(BaseModel):
 class FundUpdateRequest(BaseModel):
     name: Optional[str] = None
     base_currency: Optional[str] = None
+    total_shares: Optional[Decimal] = None
     fund_code: Optional[str] = None
     fund_type: Optional[str] = None
     status: Optional[str] = None
@@ -85,7 +88,7 @@ class FundUpdateRequest(BaseModel):
     description: Optional[str] = None
 
 class SeedCapitalRequest(BaseModel):
-    client_id: int
+    client_id: Optional[int] = None
     amount_usd: Decimal
     seed_date: date
     shares_override: Optional[Decimal] = None  # if set, use this instead of amount ÷ 1.0
@@ -107,13 +110,13 @@ class ClientUpdateRequest(BaseModel):
 
 class AccountCreateRequest(BaseModel):
     fund_id: int
-    client_id: Optional[int] = None
+    holder_name: Optional[str] = None
     broker: str
     account_no: str
 
 class AccountUpdateRequest(BaseModel):
     fund_id: Optional[int] = None
-    client_id: Optional[int] = None
+    holder_name: Optional[str] = None
     broker: Optional[str] = None
     account_no: Optional[str] = None
 

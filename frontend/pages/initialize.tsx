@@ -115,14 +115,16 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
   }
 
   async function handleSeedCapital() {
-    if (!selectedFundId || !seedClientId || !seedAmount || !seedDate) return;
+    if (!selectedFundId || !seedAmount || !seedDate) return;
     setSeedSaving(true);
     try {
-      const payload: { client_id: number; amount_usd: number; seed_date: string; shares_override?: number } = {
-        client_id: Number(seedClientId),
+      const payload: { client_id?: number; amount_usd: number; seed_date: string; shares_override?: number } = {
         amount_usd: Number(seedAmount),
         seed_date: seedDate,
       };
+      if (seedClientId) {
+        payload.client_id = Number(seedClientId);
+      }
       if (seedSharesOverride) {
         (payload as any).shares_override = Number(seedSharesOverride);
       }
@@ -281,15 +283,15 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
           <div style={{ display: 'grid', gap: 12 }}>
             <FormField label={t('client')}>
               <select style={styles.input} value={seedClientId} onChange={e => setSeedClientId(e.target.value)} disabled={seedSaving}>
-                <option value="">— {t('allClients')} —</option>
+                <option value="">{t('selectClientPlaceholder')}</option>
                 {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </FormField>
-            <FormField label={`${t('amountUsd')} (USD)`}>
-              <input type="number" step="any" style={styles.input} value={seedAmount} onChange={e => setSeedAmount(e.target.value)} placeholder="1000000" disabled={seedSaving} />
+            <FormField label={`${t('amountUsd')} (USD) *`}>
+              <input type="number" step="any" style={styles.input} value={seedAmount} onChange={e => setSeedAmount(e.target.value)} placeholder="1000000" disabled={seedSaving} required />
             </FormField>
-            <FormField label={t('initStep3SeedDate')}>
-              <input type="date" style={styles.input} value={seedDate} onChange={e => setSeedDate(e.target.value)} disabled={seedSaving} />
+            <FormField label={`${t('initStep3SeedDate')} *`}>
+              <input type="date" style={styles.input} value={seedDate} onChange={e => setSeedDate(e.target.value)} disabled={seedSaving} required />
             </FormField>
             <FormField label={t('initStep3SharesLabel')}>
               <input
@@ -306,7 +308,11 @@ export default function Page({ funds: initialFunds, clients, error }: Props) {
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
             <button style={styles.buttonSecondary} onClick={() => setStep(2)} disabled={seedSaving}>{t('prevStep')}</button>
             <button style={styles.buttonSecondary} onClick={() => setStep(4)} disabled={seedSaving}>{t('skipStep')}</button>
-            <button style={styles.buttonPrimary} onClick={handleSeedCapital} disabled={seedSaving || !seedClientId || !seedAmount || !seedDate}>
+            <button
+              style={{ ...styles.buttonPrimary, ...((seedSaving || !seedAmount || !seedDate) ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              onClick={handleSeedCapital}
+              disabled={seedSaving || !seedAmount || !seedDate}
+            >
               {seedSaving ? t('recording') : t('recordSeedCapital')}
             </button>
           </div>

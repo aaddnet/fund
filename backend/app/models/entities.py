@@ -54,11 +54,10 @@ class Account(Base, TimestampMixin):
     __tablename__ = "account"
     __table_args__ = (
         UniqueConstraint("fund_id", "account_no", name="uq_account_fund_account_no"),
-        Index("idx_account_client_id", "client_id"),
     )
     id = Column(Integer, primary_key=True)
     fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
-    client_id = Column(Integer, ForeignKey("client.id"))
+    holder_name = Column(String(200))
     broker = Column(String(100), nullable=False)
     account_no = Column(String(100), nullable=False)
 
@@ -181,7 +180,7 @@ class ShareTransaction(Base, TimestampMixin):
     __table_args__ = (Index("idx_share_transaction_client_date", "client_id", "tx_date"),)
     id = Column(Integer, primary_key=True)
     fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
-    client_id = Column(Integer, ForeignKey("client.id"), nullable=False)
+    client_id = Column(Integer, ForeignKey("client.id"), nullable=True)
     tx_date = Column(Date, nullable=False)
     tx_type = Column(String(20), nullable=False)
     amount_usd = Column(Numeric(24, 8), nullable=False)
@@ -311,7 +310,7 @@ class ShareRegister(Base, TimestampMixin):
     __table_args__ = (Index("idx_share_register_fund_client", "fund_id", "client_id"),)
     id = Column(Integer, primary_key=True)
     fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
-    client_id = Column(Integer, ForeignKey("client.id"), nullable=False)
+    client_id = Column(Integer, ForeignKey("client.id"), nullable=True)
     event_date = Column(Date, nullable=False)
     event_type = Column(String(30), nullable=False)
     shares_delta = Column(Numeric(24, 8), nullable=False)

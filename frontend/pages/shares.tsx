@@ -12,6 +12,8 @@ import {
   ShareTransaction,
   createShareRedemption,
   createShareSubscription,
+  updateShareTransaction,
+  deleteShareTransaction,
   getClients,
   getFunds,
   getNav,
@@ -34,18 +36,19 @@ type Props = {
 
 type FormMode = 'subscribe' | 'redeem';
 
-export default function Page({ shares, balances, funds, clients, navRecords, error }: Props) {
-  const { hasPermission } = useAuth();
+export default function Page({ shares, balances, funds, clients, navRecords = [], error }: Props) {
+  const { hasPermission, user } = useAuth();
   const { t } = useI18n();
   const { showToast } = useToast();
   const canWriteShares = hasPermission('shares.write');
-  
+  const isAdmin = user?.role === 'admin';
+
   const defaultFundId = String(funds[0]?.id ?? 1);
   const defaultClientId = String(clients[0]?.id ?? 1);
-  
+
   const [rows, setRows] = useState(shares);
   const [balanceRows, setBalanceRows] = useState(balances);
-  
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [mode, setMode] = useState<FormMode>('subscribe');
   const [fundId, setFundId] = useState(defaultFundId);
@@ -59,7 +62,6 @@ export default function Page({ shares, balances, funds, clients, navRecords, err
     return first?.nav_date ?? '';
   });
 
-  // When fund changes, auto-select the first locked NAV date of that fund
   useEffect(() => {
     if (lockedNavDates.length > 0 && !lockedNavDates.includes(txDate)) {
       setTxDate(lockedNavDates[0]);
@@ -70,10 +72,22 @@ export default function Page({ shares, balances, funds, clients, navRecords, err
   const [amountUsd, setAmountUsd] = useState('500');
   const [submitting, setSubmitting] = useState(false);
 
+  // Edit modal state
+  const [editingTx, setEditingTx] = useState<ShareTransaction | null>(null);
+  const [editTxDate, setEditTxDate] = useState('');
+  const [editTxType, setEditTxType] = useState('');
+  const [editAmountUsd, setEditAmountUsd] = useState('');
+  const [editShares, setEditShares] = useState('');
+  const [editNavAtDate, setEditNavAtDate] = useState('');
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
   const selectedBalance = useMemo(
     () => balanceRows.find((item) => item.fund_id === Number(fundId) && item.client_id === Number(clientId)),
     [balanceRows, clientId, fundId],
   );
+
+  const fundMap = useMemo(() => Object.fromEntries(funds.map(f => [f.id, f.name])), [funds]);
+  const clientMap = useMemo(() => Object.fromEntries(clients.map(c => [c.id, c.name])), [clients]);
 
   function openModal(newMode: FormMode) {
     setMode(newMode);
@@ -82,6 +96,15 @@ export default function Page({ shares, balances, funds, clients, navRecords, err
 
   function closeModal() {
     setIsModalOpen(false);
+  }
+
+  function openEdit(tx: ShareTransaction) {
+    setEditTxDate(tx.tx_date);
+    setEditTxType(tx.tx_type);
+    setEditAmountUsd(String(tx.amount_usd));
+    setEditShares(String(tx.shares));
+    setEditNavAtDate(String(tx.nav_at_date));
+    setEditingTx(tx);
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -129,6 +152,39 @@ export default function Page({ shares, balances, funds, clients, navRecords, err
     }
   }
 
+  async function handleEditSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingTx) return;
+    setEditSubmitting(true);
+    try {
+      const updated = await updateShareTransaction(editingTx.id, {
+        tx_date: editTxDate,
+        tx_type: editTxType,
+        amount_usd: Number(editAmountUsd),
+        shares: Number(editShares),
+        nav_at_date: Number(editNavAtDate),
+      });
+      setRows(prev => prev.map(r => r.id === updated.id ? updated : r));
+      setEditingTx(null);
+      showToast('Share transaction updated.', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update.', 'error');
+    } finally {
+      setEditSubmitting(false);
+    }
+  }
+
+  async function handleDelete(txId: number) {
+    if (!confirm(t('confirmDeleteShareTx'))) return;
+    try {
+      await deleteShareTransaction(txId);
+      setRows(prev => prev.filter(r => r.id !== txId));
+      showToast('Share transaction deleted.', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete.', 'error');
+    }
+  }
+
   return (
     <Layout title={t('sharesTitle')} subtitle={t('sharesSubtitle')} requiredPermission='shares.read'>
       {error ? <div style={{ ...styles.card, marginBottom: 16, color: colors.danger }}>{t('backendWarning')}: {error}</div> : null}
@@ -157,8 +213,8 @@ export default function Page({ shares, balances, funds, clients, navRecords, err
             emptyText={t('noAccountsFound')}
             rows={balanceRows}
             columns={[
-              { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
-              { key: 'client', title: t('client'), render: (item) => item.client_id },
+              { key: 'fund', title: t('fund'), render: (item) => fundMap[item.fund_id] ?? `#${item.fund_id}` },
+              { key: 'client', title: t('client'), render: (item) => clientMap[item.client_id] ?? `#${item.client_id}` },
               { key: 'balance', title: t('sharesLabel'), render: (item) => formatNumber(item.share_balance, 8) },
             ]}
           />
@@ -172,16 +228,40 @@ export default function Page({ shares, balances, funds, clients, navRecords, err
           rows={rows}
           columns={[
             { key: 'date', title: t('date'), render: (item) => item.tx_date },
-            { key: 'type', title: t('type'), render: (item) => item.tx_type },
-            { key: 'fund', title: t('fund'), render: (item) => item.fund_id },
-            { key: 'client', title: t('client'), render: (item) => item.client_id },
+            { key: 'type', title: t('type'), render: (item) => {
+              const c = item.tx_type === 'subscribe' ? '#16a34a' : item.tx_type === 'redeem' ? '#dc2626' : item.tx_type === 'seed' ? '#2563eb' : colors.text;
+              return <span style={{ color: c, fontWeight: 600, fontSize: 12 }}>{item.tx_type}</span>;
+            }},
+            { key: 'fund', title: t('fund'), render: (item) => fundMap[item.fund_id] ?? `#${item.fund_id}` },
+            { key: 'client', title: t('client'), render: (item) => item.client_id ? (clientMap[item.client_id] ?? `#${item.client_id}`) : '—' },
             { key: 'amount', title: t('amountUsd'), render: (item) => formatNumber(item.amount_usd) },
             { key: 'shares', title: t('sharesLabel'), render: (item) => formatNumber(item.shares, 8) },
             { key: 'nav', title: 'NAV at Date', render: (item) => formatNumber(item.nav_at_date) },
+            ...(isAdmin ? [{
+              key: 'actions',
+              title: '',
+              render: (item: ShareTransaction) => (
+                <div style={{ whiteSpace: 'nowrap' }}>
+                  <button
+                    style={{ ...styles.buttonSecondary, padding: '3px 8px', fontSize: 12, marginRight: 4 }}
+                    onClick={() => openEdit(item)}
+                  >
+                    {t('editEntry')}
+                  </button>
+                  <button
+                    style={{ ...styles.buttonSecondary, padding: '3px 8px', fontSize: 12, color: colors.danger, borderColor: colors.danger }}
+                    onClick={() => handleDelete(item.id)}
+                  >
+                    {t('deleteEntry')}
+                  </button>
+                </div>
+              ),
+            }] : []),
           ]}
         />
       </div>
 
+      {/* Subscribe / Redeem modal */}
       <Modal isOpen={isModalOpen} onClose={closeModal} title={mode === 'subscribe' ? t('createSubscription') : t('createRedemption')}>
         <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 14 }}>
           <FormField label={t('fund')}>
@@ -226,6 +306,37 @@ export default function Page({ shares, balances, funds, clients, navRecords, err
         </form>
       </Modal>
 
+      {/* Edit modal (admin only) */}
+      <Modal isOpen={!!editingTx} onClose={() => setEditingTx(null)} title={t('editShareTx')}>
+        <form onSubmit={handleEditSubmit} style={{ display: 'grid', gap: 12 }}>
+          <FormField label={t('date')}>
+            <input type="date" style={styles.input} value={editTxDate} onChange={e => setEditTxDate(e.target.value)} disabled={editSubmitting} required />
+          </FormField>
+          <FormField label={t('type')}>
+            <select style={styles.input} value={editTxType} onChange={e => setEditTxType(e.target.value)} disabled={editSubmitting}>
+              {['seed', 'subscribe', 'redeem'].map(tt => <option key={tt} value={tt}>{tt}</option>)}
+            </select>
+          </FormField>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FormField label={t('amountUsd')}>
+              <input type="number" step="any" style={styles.input} value={editAmountUsd} onChange={e => setEditAmountUsd(e.target.value)} disabled={editSubmitting} required />
+            </FormField>
+            <FormField label={t('sharesLabel')}>
+              <input type="number" step="any" style={styles.input} value={editShares} onChange={e => setEditShares(e.target.value)} disabled={editSubmitting} required />
+            </FormField>
+          </div>
+          <FormField label="NAV at Date">
+            <input type="number" step="any" style={styles.input} value={editNavAtDate} onChange={e => setEditNavAtDate(e.target.value)} disabled={editSubmitting} required />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <button type="button" style={styles.buttonSecondary} onClick={() => setEditingTx(null)} disabled={editSubmitting}>{t('cancel')}</button>
+            <button type="submit" style={styles.buttonPrimary} disabled={editSubmitting}>
+              {editSubmitting ? t('saving') : t('saveAndNext')}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
     </Layout>
   );
 }
@@ -240,6 +351,6 @@ export async function getServerSideProps(context: any) {
     const [shares, balances, fundData, clientData, navRecords] = await Promise.all([getShareHistory({ accessToken: auth.accessToken }), getShareBalances({ accessToken: auth.accessToken }), getFunds(1, 50, auth.accessToken), getClients({ accessToken: auth.accessToken }), getNav(undefined, auth.accessToken)]);
     return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, shares, balances, funds: fundData.items ?? [], clients: clientData.items ?? [], navRecords: navRecords ?? [] } };
   } catch (error) {
-    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, shares: [], balances: [], funds: [], clients: [], error: error instanceof Error ? error.message : 'unknown error' } };
+    return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, shares: [], balances: [], funds: [], clients: [], navRecords: [], error: error instanceof Error ? error.message : 'unknown error' } };
   }
 }

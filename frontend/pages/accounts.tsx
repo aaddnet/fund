@@ -13,7 +13,7 @@ import ProductTable from '../components/ProductTable';
 import FormField from '../components/FormField';
 import Modal from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { Account, Client, Fund, getAccounts, getClients, getFunds, createAccount, updateAccount } from '../lib/api';
+import { Account, Fund, getAccounts, getFunds, createAccount, updateAccount } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { requirePageAuth } from '../lib/pageAuth';
@@ -23,35 +23,34 @@ type Props = {
   rows: Account[];
   total: number;
   funds: Fund[];
-  clients: Client[];
   filters: {
     fundId: string;
-    clientId: string;
+    holder: string;
     broker: string;
     q: string;
   };
   error?: string;
 };
 
-export default function Page({ rows, total, funds, clients, filters, error }: Props) {
+export default function Page({ rows, total, funds, filters, error }: Props) {
   const { t } = useI18n();
   const { hasPermission } = useAuth();
   const { showToast } = useToast();
   const canWrite = hasPermission('accounts.write');
-  const activeFilterCount = useMemo(() => [filters.fundId, filters.clientId, filters.broker, filters.q].filter(Boolean).length, [filters]);
+  const activeFilterCount = useMemo(() => [filters.fundId, filters.holder, filters.broker, filters.q].filter(Boolean).length, [filters]);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
 
   const [fundId, setFundId] = useState('');
-  const [clientId, setClientId] = useState('');
+  const [holderName, setHolderName] = useState('');
   const [broker, setBroker] = useState('');
   const [accountNo, setAccountNo] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   function openCreate() {
     setFundId('');
-    setClientId('');
+    setHolderName('');
     setBroker('');
     setAccountNo('');
     setIsCreateOpen(true);
@@ -59,7 +58,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
 
   function openEdit(account: Account) {
     setFundId(String(account.fund_id));
-    setClientId(String(account.client_id || ''));
+    setHolderName(account.holder_name || '');
     setBroker(account.broker);
     setAccountNo(account.account_no);
     setEditingAccount(account);
@@ -75,7 +74,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
     if (!canWrite) return;
     setSubmitting(true);
     try {
-      await createAccount({ fund_id: Number(fundId), client_id: clientId ? Number(clientId) : undefined, broker, account_no: accountNo });
+      await createAccount({ fund_id: Number(fundId), holder_name: holderName || undefined, broker, account_no: accountNo });
       showToast('Account created successfully', 'success');
       window.location.reload();
     } catch (err) {
@@ -89,7 +88,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
     if (!canWrite || !editingAccount) return;
     setSubmitting(true);
     try {
-      await updateAccount(editingAccount.id, { fund_id: Number(fundId), client_id: clientId ? Number(clientId) : null, broker, account_no: accountNo });
+      await updateAccount(editingAccount.id, { fund_id: Number(fundId), holder_name: holderName || null, broker, account_no: accountNo });
       showToast('Account updated successfully', 'success');
       window.location.reload();
     } catch (err) {
@@ -123,12 +122,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
             </div>
             <div>
               <label style={styles.label}>{t('accountHolder')}</label>
-              <select name='clientId' defaultValue={filters.clientId} style={styles.input}>
-                <option value=''>{t('allClients')}</option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>{`#${client.id} · ${client.name}`}</option>
-                ))}
-              </select>
+              <input name='holder' defaultValue={filters.holder} style={styles.input} placeholder={t('accountHolder')} />
             </div>
             <div>
               <label style={styles.label}>{t('brokerContains')}</label>
@@ -166,11 +160,11 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
           emptyText={t('noAccountsForFilter')}
           rows={rows}
           columns={[
-            { key: 'id', title: t('accountId'), render: (item) => item.id },
+            { key: 'id', title: t('accountId'), render: (item) => <Link href={`/accounts/${item.id}`} style={{ color: colors.primary, fontWeight: 600 }}>#{item.id}</Link> },
             { key: 'fund', title: t('fund'), render: (item) => item.fund_name || `Fund #${item.fund_id}` },
-            { key: 'client', title: t('accountHolder'), render: (item) => item.client_name || (item.client_id ? `#${item.client_id}` : t('notAvailable')) },
+            { key: 'holder', title: t('accountHolder'), render: (item) => item.holder_name || t('notAvailable') },
             { key: 'broker', title: 'Broker', render: (item) => item.broker },
-            { key: 'account', title: 'Account No', render: (item) => item.account_no },
+            { key: 'account', title: 'Account No', render: (item) => <Link href={`/accounts/${item.id}`} style={{ color: colors.primary }}>{item.account_no}</Link> },
             { key: 'positions', title: t('currentPositions'), render: (item) => item.position_count },
             { key: 'transactions', title: t('transactions'), render: (item) => item.transaction_count },
             { key: 'trade', title: t('latestTrade'), render: (item) => item.latest_trade_date || t('notAvailable') },
@@ -198,11 +192,8 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
               {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
           </FormField>
-          <FormField label={`${t('accountHolder')} (optional)`}>
-            <select style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
-              <option value="">— No client —</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+          <FormField label={t('accountHolder')}>
+            <input style={styles.input} value={holderName} onChange={e => setHolderName(e.target.value)} placeholder={t('accountHolder')} disabled={submitting} />
           </FormField>
           <FormField label="Broker">
             <select required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={submitting}>
@@ -230,11 +221,8 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
               {funds.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
           </FormField>
-          <FormField label={`${t('accountHolder')} (optional)`}>
-            <select style={styles.input} value={clientId} onChange={e => setClientId(e.target.value)} disabled={submitting}>
-              <option value="">— No client —</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+          <FormField label={t('accountHolder')}>
+            <input style={styles.input} value={holderName} onChange={e => setHolderName(e.target.value)} placeholder={t('accountHolder')} disabled={submitting} />
           </FormField>
           <FormField label="Broker">
             <select required style={styles.input} value={broker} onChange={e => setBroker(e.target.value)} disabled={submitting}>
@@ -260,7 +248,7 @@ export default function Page({ rows, total, funds, clients, filters, error }: Pr
 
 export async function getServerSideProps(context: any) {
   const fundId = typeof context.query.fundId === 'string' ? context.query.fundId : '';
-  const clientId = typeof context.query.clientId === 'string' ? context.query.clientId : '';
+  const holder = typeof context.query.holder === 'string' ? context.query.holder : '';
   const broker = typeof context.query.broker === 'string' ? context.query.broker : '';
   const q = typeof context.query.q === 'string' ? context.query.q : '';
 
@@ -270,10 +258,9 @@ export async function getServerSideProps(context: any) {
   }
 
   try {
-    const [accountData, fundData, clientData] = await Promise.all([
-      getAccounts({ accessToken: auth.accessToken, fundId: fundId ? Number(fundId) : undefined, clientId: clientId ? Number(clientId) : undefined, broker: broker || undefined, q: q || undefined }),
+    const [accountData, fundData] = await Promise.all([
+      getAccounts({ accessToken: auth.accessToken, fundId: fundId ? Number(fundId) : undefined, holder: holder || undefined, broker: broker || undefined, q: q || undefined }),
       getFunds(1, 50, auth.accessToken),
-      getClients({ accessToken: auth.accessToken }),
     ]);
 
     return {
@@ -281,8 +268,7 @@ export async function getServerSideProps(context: any) {
         rows: accountData.items ?? [],
         total: accountData.pagination?.total ?? accountData.items?.length ?? 0,
         funds: fundData.items ?? [],
-        clients: clientData.items ?? [],
-        filters: { fundId, clientId, broker, q },
+        filters: { fundId, holder, broker, q },
       },
     };
   } catch (error) {
@@ -291,8 +277,7 @@ export async function getServerSideProps(context: any) {
         rows: [],
         total: 0,
         funds: [],
-        clients: [],
-        filters: { fundId, clientId, broker, q },
+        filters: { fundId, holder, broker, q },
         error: error instanceof Error ? error.message : 'unknown error',
       },
     };

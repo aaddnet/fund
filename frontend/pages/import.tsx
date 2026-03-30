@@ -231,7 +231,7 @@ export async function getServerSideProps(context: any) {
 
   try {
     const [batches, accountData] = await Promise.all([
-      getImportBatches(auth.accessToken),
+      getImportBatches({ accessToken: auth.accessToken }),
       getAccounts({ size: 100, accessToken: auth.accessToken }),
     ]);
     return { props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, batches, accounts: accountData.items ?? [] } };

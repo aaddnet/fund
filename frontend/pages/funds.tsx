@@ -29,6 +29,7 @@ export default function Page({ rows, total, navRecords, error }: Props) {
   const [editingFund, setEditingFund] = useState<Fund | null>(null);
   const [name, setName] = useState('');
   const [baseCurrency, setBaseCurrency] = useState('USD');
+  const [totalShares, setTotalShares] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Latest locked NAV per fund: fund_id → NavRecord
@@ -46,12 +47,14 @@ export default function Page({ rows, total, navRecords, error }: Props) {
   function openCreate() {
     setName('');
     setBaseCurrency('USD');
+    setTotalShares('');
     setIsCreateOpen(true);
   }
 
   function openEdit(fund: Fund) {
     setName(fund.name);
     setBaseCurrency(fund.base_currency);
+    setTotalShares(fund.total_shares != null && Number(fund.total_shares) > 0 ? String(fund.total_shares) : '');
     setEditingFund(fund);
   }
 
@@ -65,7 +68,7 @@ export default function Page({ rows, total, navRecords, error }: Props) {
     if (!canWrite) return;
     setSubmitting(true);
     try {
-      await createFund({ name, base_currency: baseCurrency });
+      await createFund({ name, base_currency: baseCurrency, total_shares: totalShares ? Number(totalShares) : undefined });
       showToast('Fund created successfully', 'success');
       window.location.reload();
     } catch (err) {
@@ -79,7 +82,7 @@ export default function Page({ rows, total, navRecords, error }: Props) {
     if (!canWrite || !editingFund) return;
     setSubmitting(true);
     try {
-      await updateFund(editingFund.id, { name, base_currency: baseCurrency });
+      await updateFund(editingFund.id, { name, base_currency: baseCurrency, total_shares: totalShares ? Number(totalShares) : undefined });
       showToast('Fund updated successfully', 'success');
       window.location.reload();
     } catch (err) {
@@ -172,6 +175,18 @@ export default function Page({ rows, total, navRecords, error }: Props) {
               {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </FormField>
+          <FormField label={t('sharesLabel')}>
+            <input
+              type='number'
+              min='0'
+              step='any'
+              style={styles.input}
+              value={totalShares}
+              onChange={(e) => setTotalShares(e.target.value)}
+              placeholder='e.g. 1000000'
+              disabled={submitting}
+            />
+          </FormField>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
             <button type='button' onClick={closeModals} style={styles.buttonSecondary} disabled={submitting}>{t('cancel')}</button>
             <button style={styles.buttonPrimary} disabled={submitting} type='submit'>
@@ -196,6 +211,18 @@ export default function Page({ rows, total, navRecords, error }: Props) {
             <select style={styles.input} value={baseCurrency} onChange={(e) => setBaseCurrency(e.target.value)} disabled={submitting}>
               {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
+          </FormField>
+          <FormField label={t('sharesLabel')}>
+            <input
+              type='number'
+              min='0'
+              step='any'
+              style={styles.input}
+              value={totalShares}
+              onChange={(e) => setTotalShares(e.target.value)}
+              placeholder='e.g. 1000000'
+              disabled={submitting}
+            />
           </FormField>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
             <button type='button' onClick={closeModals} style={styles.buttonSecondary} disabled={submitting}>{t('cancel')}</button>
