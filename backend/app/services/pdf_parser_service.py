@@ -1,10 +1,11 @@
 """PDF annual statement parser service.
 
-Extracts text from PDF using PyMuPDF, then calls a local Ollama-compatible
-LLM to produce structured JSON with positions, cash balances, and capital events.
+Renders PDF pages to images via PyMuPDF, then sends them to a local
+Ollama vision model (qwen2-vl) for structured JSON extraction.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -22,132 +23,101 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "You are a financial data extraction API. "
-    "Output ONLY valid JSON. No prose, no markdown, no explanation."
+    "You are a financial statement data extraction API. "
+    "Output ONLY valid JSON. No prose, no markdown fences, no explanation."
 )
 
-_USER_TEMPLATE = """\
-Extract structured data from this broker statement and return JSON with exactly these fields:
+_USER_PROMPT = """\
+Extract all financial data from this broker statement image and return a single JSON object with:
 - account_info: {account_no, broker, base_currency}
-- statement_end_date: YYYY-MM-DD string
-- positions: array of {asset_code, asset_name, quantity, average_cost, currency, market_value, asset_type}
-- cash_balances: array of {currency, balance}
-- capital_events: array of {date, type (deposit/withdrawal), amount, currency, note}
-- parsing_confidence: "high", "medium", or "low"
+- statement_end_date: YYYY-MM-DD
+- positions: [{asset_code, asset_name, quantity, average_cost, currency, market_value, asset_type}]
+- cash_balances: [{currency, balance}]
+- capital_events: [{date, type (deposit/withdrawal), amount, currency, note}]
+- parsing_confidence: "high" | "medium" | "low"
 
-Statement text:
-{pdf_text}
+Return ONLY the JSON object, nothing else.
 """
 
 # ---------------------------------------------------------------------------
-# PDF text extraction + smart section trimming
+# PDF → images
 # ---------------------------------------------------------------------------
 
-# IBKR and common broker section keywords to extract
-_SECTION_KEYWORDS = [
-    "open position", "positions", "cash report", "ending cash",
-    "cash balance", "deposit", "withdrawal", "account information",
-    "account summary", "net asset value", "total equity",
-    "statement of", "portfolio", "holdings",
-]
-
-_MAX_SECTION_CHARS = 2000   # per section
-_MAX_TOTAL_CHARS = 3000     # total input to LLM — keep within thinking model token budget
+_DPI = 100          # 100 DPI keeps image size ~100 KB/page, manageable for vision model
+_MAX_PAGES = 3      # first 3 pages cover account summary + positions + cash
 
 
-def extract_pdf_text(pdf_bytes: bytes) -> str:
-    """Extract text from PDF bytes using PyMuPDF (fitz)."""
+def render_pdf_pages(pdf_bytes: bytes) -> list[str]:
+    """
+    Render PDF pages to PNG and return list of base64-encoded strings.
+    Limits to _MAX_PAGES to keep Ollama request size manageable.
+    """
     try:
-        import fitz  # type: ignore[import]
+        import fitz  # PyMuPDF
     except ImportError:
-        raise RuntimeError("PyMuPDF (fitz) is not installed. Run: pip install pymupdf")
+        raise RuntimeError("PyMuPDF is not installed. Run: pip install pymupdf")
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pages = []
+    images_b64: list[str] = []
+    mat = fitz.Matrix(_DPI / 72, _DPI / 72)   # scale factor from 72dpi base
+
     for i, page in enumerate(doc):
-        blocks = page.get_text("blocks")
-        page_text = "\n".join(b[4] for b in blocks if b[6] == 0)
-        pages.append(page_text)
-    return "\n\n".join(pages)
+        if i >= _MAX_PAGES:
+            break
+        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+        png_bytes = pix.tobytes("png")
+        images_b64.append(base64.b64encode(png_bytes).decode())
 
-
-def _extract_key_sections(full_text: str) -> str:
-    """
-    Pull only the financially relevant sections from a full statement text.
-    Looks for known section headers and grabs up to _MAX_SECTION_CHARS chars after each.
-    Falls back to a plain truncation if no sections found.
-    """
-    lines = full_text.splitlines()
-    collected: list[str] = []
-    total = 0
-    in_section = False
-    section_chars = 0
-
-    for line in lines:
-        lower = line.lower()
-        is_header = any(kw in lower for kw in _SECTION_KEYWORDS)
-
-        if is_header:
-            in_section = True
-            section_chars = 0
-
-        if in_section:
-            collected.append(line)
-            section_chars += len(line) + 1
-            total += len(line) + 1
-            if section_chars >= _MAX_SECTION_CHARS:
-                in_section = False
-            if total >= _MAX_TOTAL_CHARS:
-                break
-
-    if total < 200:
-        # No recognisable sections found — fall back to plain truncation
-        return full_text[:_MAX_TOTAL_CHARS]
-
-    return "\n".join(collected)
+    logger.info("Rendered %d PDF page(s) at %d dpi", len(images_b64), _DPI)
+    return images_b64
 
 
 # ---------------------------------------------------------------------------
-# AI parsing
+# AI parsing via vision model
 # ---------------------------------------------------------------------------
 
 async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
-    """Send key PDF sections to Ollama and return parsed JSON."""
-    full_text = extract_pdf_text(pdf_bytes)
-    text = _extract_key_sections(full_text)
-    logger.info("PDF text: %d chars full → %d chars after section trim", len(full_text), len(text))
+    """Send rendered PDF page images to Ollama vision model, return parsed JSON."""
+    images_b64 = render_pdf_pages(pdf_bytes)
+    if not images_b64:
+        raise ValueError("PDF rendered 0 pages.")
 
     ollama_base = settings.ollama_base_url
     model = settings.ollama_model
 
-    user_content = _USER_TEMPLATE.replace("{pdf_text}", text)
-
+    # Ollama vision API: images attached to the user message
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
+            {
+                "role": "user",
+                "content": _USER_PROMPT,
+                "images": images_b64,
+            },
         ],
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
+        "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": 8192},
     }
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    logger.info("Sending %d image(s) to %s / %s", len(images_b64), ollama_base, model)
+    async with httpx.AsyncClient(timeout=600.0) as client:
         resp = await client.post(f"{ollama_base}/api/chat", json=payload)
         resp.raise_for_status()
         raw = resp.json()["message"]["content"]
 
-    logger.info("Ollama raw (first 300): %s", raw[:300])
+    logger.info("Vision model raw (first 400): %s", raw[:400])
     return _parse_json_response(raw)
 
 
-def _strip_think_tags(raw: str) -> str:
-    return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
+# ---------------------------------------------------------------------------
+# JSON extraction helpers
+# ---------------------------------------------------------------------------
 
 def _parse_json_response(raw: str) -> dict:
-    """Strip think tags + markdown fences, extract first JSON object, parse."""
-    raw = _strip_think_tags(raw)
+    """Strip think tags + markdown fences, extract first JSON object."""
+    # Remove <think>...</think> reasoning blocks
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
     # Strip markdown code fences
     if raw.startswith("```"):
@@ -157,34 +127,33 @@ def _parse_json_response(raw: str) -> dict:
             inner = inner[:-1]
         raw = "\n".join(inner).strip()
 
-    # If still doesn't start with {, scan for first JSON object
+    # Find first complete JSON object
     if not raw.startswith("{"):
         m = re.search(r"\{[\s\S]*\}", raw)
         if m:
             raw = m.group(0)
 
-    # Try to fix truncated JSON by finding the last complete top-level key
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # Attempt to recover by truncating at the last complete field
-        truncated = _recover_truncated_json(raw)
-        if truncated:
-            return truncated
+        recovered = _recover_truncated_json(raw)
+        if recovered:
+            return recovered
         logger.warning("JSON parse failed | raw: %s", raw[:500])
         return {"parse_error": True, "raw_text": raw[:1000]}
 
 
 def _recover_truncated_json(raw: str) -> dict | None:
-    """Try progressively shorter strings until JSON parses (handles truncated output)."""
-    # Find the last } and try parsing up to it
-    last_brace = raw.rfind("}")
-    while last_brace > 0:
-        candidate = raw[:last_brace + 1]
+    """Walk back from last } to find the longest parseable prefix."""
+    pos = len(raw) - 1
+    while pos > 0:
+        pos = raw.rfind("}", 0, pos + 1)
+        if pos < 0:
+            break
         try:
-            return json.loads(candidate)
+            return json.loads(raw[: pos + 1])
         except json.JSONDecodeError:
-            last_brace = raw.rfind("}", 0, last_brace)
+            pos -= 1
     return None
 
 
