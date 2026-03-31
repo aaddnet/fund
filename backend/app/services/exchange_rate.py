@@ -1,3 +1,5 @@
+import csv
+import io
 from datetime import date, datetime, timezone
 import logging
 import requests
@@ -34,6 +36,7 @@ def fetch_and_save_rates(db: Session, base: str, quote: str, snapshot_date: date
                 quote_currency=quote,
                 rate=rate,
                 snapshot_date=snapshot_date,
+                source="frankfurter",
                 updated_at=datetime.now(timezone.utc),
             )
             db.add(item)
@@ -47,7 +50,27 @@ def fetch_and_save_rates(db: Session, base: str, quote: str, snapshot_date: date
     raise last_exc  # type: ignore[misc]
 
 
-def save_rate_manual(db: Session, base: str, quote: str, rate: float, snapshot_date: date) -> ExchangeRate:
+def save_rates_csv(db: Session, content: bytes) -> list[ExchangeRate]:
+    """Bulk-import FX rates from CSV. Expected columns: date,from_currency,to_currency,rate"""
+    text = content.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    results = []
+    for row in reader:
+        try:
+            snap_date = date.fromisoformat(str(row.get("date", "")).strip())
+            base = str(row.get("from_currency", "")).strip().upper()
+            quote = str(row.get("to_currency", "")).strip().upper()
+            rate_val = float(str(row.get("rate", "")).strip())
+            if not base or not quote:
+                continue
+            item = save_rate_manual(db, base, quote, rate_val, snap_date, source="csv")
+            results.append(item)
+        except (ValueError, KeyError):
+            continue
+    return results
+
+
+def save_rate_manual(db: Session, base: str, quote: str, rate: float, snapshot_date: date, source: str = "manual") -> ExchangeRate:
     """Upsert an FX rate manually (offline fallback when external API is unreachable)."""
     base = base.upper().strip()
     quote = quote.upper().strip()
@@ -56,6 +79,7 @@ def save_rate_manual(db: Session, base: str, quote: str, rate: float, snapshot_d
     ).first()
     if existing:
         existing.rate = rate
+        existing.source = source
         existing.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(existing)
@@ -66,6 +90,7 @@ def save_rate_manual(db: Session, base: str, quote: str, rate: float, snapshot_d
         quote_currency=quote,
         rate=rate,
         snapshot_date=snapshot_date,
+        source=source,
         updated_at=datetime.now(timezone.utc),
     )
     db.add(item)

@@ -4,6 +4,7 @@ import Layout from '../../components/Layout';
 import ProductTable from '../../components/ProductTable';
 import {
   Account,
+  AssetPrice,
   CashPosition,
   ImportBatch,
   Position,
@@ -11,6 +12,7 @@ import {
   getAccount,
   getCashPositions,
   getImportBatches,
+  getPrices,
   getPositions,
   getTransactions,
 } from '../../lib/api';
@@ -26,10 +28,11 @@ type Props = {
   transactions: Transaction[];
   imports: ImportBatch[];
   cashPositions: CashPosition[];
+  latestPrices: AssetPrice[];
   error?: string;
 };
 
-export default function Page({ account, positions, transactions, imports, cashPositions, error }: Props) {
+export default function Page({ account, positions, transactions, imports, cashPositions, latestPrices, error }: Props) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('positions');
 
@@ -65,9 +68,21 @@ export default function Page({ account, positions, transactions, imports, cashPo
       .sort((a, b) => a.asset_code.localeCompare(b.asset_code));
   }, [positions]);
 
+  // Build price map: asset_code -> latest price_usd
+  const priceMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of latestPrices) {
+      map.set(p.asset_code.toUpperCase(), Number(p.price_usd));
+    }
+    return map;
+  }, [latestPrices]);
+
   const totalPositionValue = useMemo(
-    () => aggregatedPositions.reduce((sum, p) => sum + p.quantity * p.average_cost, 0),
-    [aggregatedPositions],
+    () => aggregatedPositions.reduce((sum, p) => {
+      const mktPrice = priceMap.get(p.asset_code.toUpperCase());
+      return sum + (mktPrice != null ? p.quantity * mktPrice : p.quantity * p.average_cost);
+    }, 0),
+    [aggregatedPositions, priceMap],
   );
 
   const totalCash = useMemo(
@@ -154,7 +169,29 @@ export default function Page({ account, positions, transactions, imports, cashPo
               { key: 'qty', title: t('quantity'), render: r => fmt(r.quantity, 4) },
               { key: 'avg', title: t('avgCost'), render: r => fmt(r.average_cost, 4) },
               { key: 'cur', title: 'Currency', render: r => r.currency },
-              { key: 'val', title: 'Value (Cost)', render: r => `$${fmt(r.quantity * r.average_cost)}` },
+              { key: 'cost_val', title: '成本市值', render: r => `$${fmt(r.quantity * r.average_cost)}` },
+              { key: 'cur_price', title: '当前价格', render: r => {
+                const mkt = priceMap.get(r.asset_code.toUpperCase());
+                if (mkt == null) return <span style={{ color: colors.muted, fontSize: 11 }}>估值</span>;
+                return `$${fmt(mkt, 4)}`;
+              }},
+              { key: 'mkt_val', title: '当前市值', render: r => {
+                const mkt = priceMap.get(r.asset_code.toUpperCase());
+                const val = mkt != null ? r.quantity * mkt : r.quantity * r.average_cost;
+                return `$${fmt(val)}`;
+              }},
+              { key: 'pnl', title: '浮动盈亏', render: r => {
+                const mkt = priceMap.get(r.asset_code.toUpperCase());
+                if (mkt == null) return '—';
+                const pnl = r.quantity * mkt - r.quantity * r.average_cost;
+                return <span style={{ color: pnl >= 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{pnl >= 0 ? '+' : ''}{fmt(pnl)}</span>;
+              }},
+              { key: 'pnl_pct', title: '盈亏%', render: r => {
+                const mkt = priceMap.get(r.asset_code.toUpperCase());
+                if (mkt == null || r.average_cost === 0) return '—';
+                const pct = (mkt - r.average_cost) / r.average_cost * 100;
+                return <span style={{ color: pct >= 0 ? '#16a34a' : '#dc2626' }}>{pct >= 0 ? '+' : ''}{fmt(pct, 2)}%</span>;
+              }},
               { key: 'snap', title: t('snapshotDate'), render: r => r.snapshot_date },
             ]}
           />
@@ -240,12 +277,13 @@ export async function getServerSideProps(context: any) {
   }
 
   try {
-    const [account, posData, txData, importData, cashData] = await Promise.all([
+    const [account, posData, txData, importData, cashData, priceData] = await Promise.all([
       getAccount(accountId, auth.accessToken),
       getPositions({ accountId, size: 200, accessToken: auth.accessToken }),
       getTransactions({ accountId, size: 200, accessToken: auth.accessToken }),
       getImportBatches({ accountId, accessToken: auth.accessToken }),
       getCashPositions({ accountId, accessToken: auth.accessToken }),
+      getPrices({ size: 200, accessToken: auth.accessToken }),
     ]);
 
     return {
@@ -257,6 +295,7 @@ export async function getServerSideProps(context: any) {
         transactions: txData.items ?? [],
         imports: importData ?? [],
         cashPositions: cashData ?? [],
+        latestPrices: priceData.items ?? [],
       },
     };
   } catch (error: any) {
@@ -269,6 +308,7 @@ export async function getServerSideProps(context: any) {
         transactions: [],
         imports: [],
         cashPositions: [],
+        latestPrices: [],
         error: error?.message || 'Failed to load account detail.',
       },
     };

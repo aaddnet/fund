@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_db
-from app.models import Account, AssetPrice, AuthUser, CashPosition, Client, ClientCapitalAccount, ExchangeRate, FeeRecord, Fund, NAVRecord, Position, ShareRegister, Transaction
+from app.models import Account, AssetPrice, AuthUser, CashPosition, Client, ClientCapitalAccount, ExchangeRate, FeeRecord, Fund, NAVRecord, PdfImportBatch, Position, ShareRegister, ShareTransaction, Transaction
 from app.schemas.common import (
     AuthPasswordChangeRequest,
     AuthPasswordResetRequest,
@@ -28,6 +28,8 @@ from app.schemas.common import (
     FundUpdateRequest,
     NavCalcRequest,
     NavRebuildRequest,
+    PdfImportConfirmRequest,
+    PriceManualRequest,
     PriceFetchRequest,
     RateFetchRequest,
     RateManualRequest,
@@ -54,11 +56,12 @@ from app.services.auth import (
     update_auth_user,
     permissions_for_role,
 )
-from app.services.exchange_rate import fetch_and_save_rates, save_rate_manual
+from app.services.exchange_rate import fetch_and_save_rates, save_rate_manual, save_rates_csv
 from app.services.fee_service import calc_fee, list_fees
 from app.services.import_service import confirm_batch, get_batch, list_batches, reset_batch, serialize_batch, upload_csv
-from app.services.nav_engine import calc_nav, list_nav, rebuild_nav_batch
-from app.services.price_service import fetch_and_save_prices
+from app.services.nav_engine import calc_nav, check_nav_rates, list_nav, rebuild_nav_batch
+from app.services.pdf_parser_service import confirm_pdf_batch, serialize_pdf_batch
+from app.services.price_service import fetch_and_save_prices, save_price_manual, save_prices_csv
 from app.services.scheduler import SCHEDULER_JOB_FX_WEEKLY, list_job_runs, run_weekly_fx_job
 from app.services.share_service import balances, history, redeem, subscribe
 
@@ -225,6 +228,20 @@ def upsert_rate_manual(req: RateManualRequest, db: Session = Depends(get_db), ac
     return _serialize_rate(row)
 
 
+@router.post("/rates/csv")
+async def import_rates_csv(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Bulk-import FX rates from CSV (columns: date,from_currency,to_currency,rate)."""
+    require_permissions(actor, "rates.write")
+    content = await file.read()
+    rows = save_rates_csv(db, content)
+    record_audit(db, actor, action="rate.csv_import", entity_type="exchange_rate", entity_id="batch", detail={"count": len(rows)})
+    return {"imported": len(rows)}
+
+
 @router.post("/price/fetch")
 def fetch_price(req: PriceFetchRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "price.write")
@@ -256,6 +273,37 @@ def list_price_records(
     if asset_code:
         query = query.filter(AssetPrice.asset_code == asset_code.upper())
     return _paginate(query.order_by(AssetPrice.snapshot_date.desc(), AssetPrice.id.desc()), page, size, _serialize_price)
+
+
+@router.post("/price/manual")
+def upsert_price_manual(req: PriceManualRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """Manually upsert a single asset price."""
+    require_permissions(actor, "price.write")
+    row = save_price_manual(db, req.asset_code, float(req.price_usd), req.snapshot_date)
+    record_audit(db, actor, action="price.manual", entity_type="asset_price", entity_id=str(row.id),
+                 detail={"asset_code": req.asset_code, "price_usd": float(req.price_usd), "snapshot_date": req.snapshot_date.isoformat()})
+    return _serialize_price(row)
+
+
+@router.post("/price/csv")
+async def import_prices_csv(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Bulk-import asset prices from CSV (columns: asset_code,price_usd,price_date)."""
+    require_permissions(actor, "price.write")
+    content = await file.read()
+    rows = save_prices_csv(db, content)
+    record_audit(db, actor, action="price.csv_import", entity_type="asset_price", entity_id="batch", detail={"count": len(rows)})
+    return {"imported": len(rows)}
+
+
+@router.get("/nav/check-rates")
+def nav_check_rates(fund_id: int, nav_date: date, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """Pre-flight check: return which FX rates are missing for a NAV calculation date."""
+    require_permissions(actor, "nav.read")
+    return check_nav_rates(db, fund_id, nav_date)
 
 
 @router.post("/nav/calc")
@@ -466,7 +514,11 @@ async def upload_import_batch(
         )
         return serialize_batch(batch)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        msg = str(e)
+        if msg.startswith("duplicate_file:"):
+            existing_id = int(msg.split(":")[1])
+            raise HTTPException(status_code=409, detail={"duplicate": True, "existing_batch_id": existing_id, "message": "检测到重复文件"})
+        raise HTTPException(status_code=400, detail=msg)
 
 
 @router.post("/import/{batch_id}/confirm")
@@ -556,6 +608,155 @@ def rebuild_nav_batch_endpoint(req: NavRebuildRequest, db: Session = Depends(get
     require_permissions(actor, "nav.write")
     results = rebuild_nav_batch(db, req.fund_id, req.start_date, req.end_date, req.frequency, force=req.force)
     return {"fund_id": req.fund_id, "results": results}
+
+
+# ---------------------------------------------------------------------------
+# PDF Import (annual statement workflow)
+# ---------------------------------------------------------------------------
+
+@router.get("/pdf-import")
+def list_pdf_batches(
+    page: int = Query(DEFAULT_PAGE, ge=1),
+    size: int = Query(DEFAULT_SIZE, ge=1, le=MAX_SIZE),
+    account_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    require_permissions(actor, "import.read")
+    query = db.query(PdfImportBatch)
+    if account_id:
+        query = query.filter(PdfImportBatch.account_id == account_id)
+    return _paginate(query.order_by(PdfImportBatch.id.desc()), page, size, serialize_pdf_batch)
+
+
+@router.post("/pdf-import/upload")
+async def upload_pdf(
+    account_id: int = Form(...),
+    snapshot_date: date = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+):
+    """Upload a PDF statement. Returns immediately with status='parsing'. Use polling to check status."""
+    require_permissions(actor, "import.write")
+    import json as _json
+    pdf_bytes = await file.read()
+    batch = PdfImportBatch(
+        account_id=account_id,
+        snapshot_date=snapshot_date,
+        filename=file.filename or "upload.pdf",
+        status="parsing",
+    )
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
+
+    async def _parse(batch_id: int, content: bytes):
+        from app.db import SessionLocal as _SL
+        from app.services.pdf_parser_service import parse_pdf_with_ai as _parse_ai
+        db2 = _SL()
+        try:
+            b = db2.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
+            result = await _parse_ai(content)
+            b.parsed_data = _json.dumps(result)
+            b.status = "failed" if result.get("parse_error") else "parsed"
+            if result.get("parse_error"):
+                b.failed_reason = result.get("raw_text", "")[:500]
+            db2.commit()
+        except Exception as exc:
+            b = db2.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
+            if b:
+                b.status = "failed"
+                b.failed_reason = str(exc)[:500]
+                db2.commit()
+        finally:
+            db2.close()
+
+    background_tasks.add_task(_parse, batch.id, pdf_bytes)
+    record_audit(db, actor, action="pdf_import.upload", entity_type="pdf_import_batch",
+                 entity_id=str(batch.id), detail={"account_id": account_id, "filename": file.filename})
+    return serialize_pdf_batch(batch)
+
+
+@router.get("/pdf-import/{batch_id}")
+def get_pdf_batch(batch_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    require_permissions(actor, "import.read")
+    batch = db.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="PDF import batch not found.")
+    return serialize_pdf_batch(batch)
+
+
+@router.post("/pdf-import/{batch_id}/confirm")
+def confirm_pdf_import(batch_id: int, req: PdfImportConfirmRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """Confirm a parsed PDF batch: write positions/cash to DB."""
+    require_permissions(actor, "import.write")
+    import json as _json
+    batch = db.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="PDF import batch not found.")
+    if req.confirmed_data:
+        batch.confirmed_data = _json.dumps(req.confirmed_data)
+        db.commit()
+    try:
+        batch = confirm_pdf_batch(db, batch_id)
+        record_audit(db, actor, action="pdf_import.confirm", entity_type="pdf_import_batch",
+                     entity_id=str(batch_id), detail={"account_id": batch.account_id, "status": batch.status})
+        return serialize_pdf_batch(batch)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/pdf-import/{batch_id}")
+def reset_pdf_import(batch_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """Reset/rollback a PDF import batch."""
+    require_permissions(actor, "import.write")
+    batch = db.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="PDF import batch not found.")
+    batch.status = "reset"
+    batch.confirmed_data = None
+    batch.pending_deposits = None
+    db.commit()
+    record_audit(db, actor, action="pdf_import.reset", entity_type="pdf_import_batch",
+                 entity_id=str(batch_id), detail={"account_id": batch.account_id})
+    return serialize_pdf_batch(batch)
+
+
+# SHR-02: delete share transaction (deposit undo)
+@router.delete("/shares/{share_tx_id}")
+def delete_share_tx(share_tx_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """Undo a share subscription/redemption transaction (admin only)."""
+    require_roles(actor, ["admin"])
+    tx = db.query(ShareTransaction).filter(ShareTransaction.id == share_tx_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Share transaction not found.")
+    # Roll back fund total shares
+    fund = db.query(Fund).filter(Fund.id == tx.fund_id).first()
+    if fund:
+        if tx.tx_type in ("subscribe", "additional", "seed"):
+            fund.total_shares = Decimal(str(fund.total_shares)) - Decimal(str(tx.shares))
+        elif tx.tx_type == "redeem":
+            fund.total_shares = Decimal(str(fund.total_shares)) + Decimal(str(tx.shares))
+    # Roll back ClientCapitalAccount
+    from app.models import ClientCapitalAccount as _CCA
+    if tx.client_id:
+        cca = db.query(_CCA).filter_by(fund_id=tx.fund_id, client_id=tx.client_id).first()
+        if cca:
+            if tx.tx_type in ("subscribe", "additional", "seed"):
+                cca.total_invested_usd = Decimal(str(cca.total_invested_usd)) - Decimal(str(tx.amount_usd))
+                cca.current_shares = Decimal(str(cca.current_shares)) - Decimal(str(tx.shares))
+            elif tx.tx_type == "redeem":
+                cca.total_redeemed_usd = Decimal(str(cca.total_redeemed_usd)) - Decimal(str(tx.amount_usd))
+                cca.current_shares = Decimal(str(cca.current_shares)) + Decimal(str(tx.shares))
+    # Delete associated share register entries
+    db.query(ShareRegister).filter(ShareRegister.ref_share_tx_id == share_tx_id).delete()
+    db.delete(tx)
+    db.commit()
+    record_audit(db, actor, action="shares.delete", entity_type="share_transaction",
+                 entity_id=str(share_tx_id), detail={"fund_id": tx.fund_id, "tx_type": tx.tx_type})
+    return {"deleted": True}
 
 
 @router.get("/fund")
@@ -1453,6 +1654,7 @@ def _serialize_rate(item: ExchangeRate) -> dict:
         "quote_currency": item.quote_currency,
         "rate": _decimal(item.rate),
         "snapshot_date": item.snapshot_date.isoformat(),
+        "source": getattr(item, "source", None),
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }

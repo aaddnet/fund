@@ -1,0 +1,213 @@
+"""PDF annual statement parser service.
+
+Extracts text from PDF using PyMuPDF, then calls a local Ollama-compatible
+LLM (or Claude API as fallback) to produce structured JSON with positions,
+cash balances, and capital events.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+from decimal import Decimal
+
+import httpx
+
+from app.core.config import settings
+from app.db import SessionLocal
+from app.models import Account, CashPosition, PdfImportBatch, Position
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = (
+    "你是专业券商账单数据提取助手。只输出JSON，不要解释。"
+    "金额为纯数字，日期格式YYYY-MM-DD。数量和价格保留小数。"
+)
+
+_USER_TEMPLATE = """\
+从以下账单提取数据，输出此JSON格式（不要包含注释）：
+{{
+  "account_info": {{"account_no": "", "broker": "", "base_currency": "USD"}},
+  "statement_end_date": "YYYY-MM-DD",
+  "positions": [
+    {{"asset_code": "", "asset_name": "", "quantity": 0.0,
+      "average_cost": 0.0, "currency": "USD", "market_value": 0.0,
+      "asset_type": "stock"}}
+  ],
+  "cash_balances": [{{"currency": "USD", "balance": 0.0}}],
+  "capital_events": [
+    {{"date": "", "type": "deposit", "amount": 0.0,
+      "currency": "USD", "note": ""}}
+  ],
+  "parsing_confidence": "high"
+}}
+
+账单内容：
+{pdf_text}
+"""
+
+# ---------------------------------------------------------------------------
+# PDF text extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract text from PDF bytes using PyMuPDF (fitz)."""
+    try:
+        import fitz  # type: ignore[import]
+    except ImportError:
+        raise RuntimeError("PyMuPDF (fitz) is not installed. Run: pip install pymupdf")
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pages = []
+    for i, page in enumerate(doc):
+        blocks = page.get_text("blocks")
+        page_text = f"--- 第{i + 1}页 ---\n" + "\n".join(b[4] for b in blocks if b[6] == 0)
+        pages.append(page_text)
+    return "\n\n".join(pages)
+
+
+# ---------------------------------------------------------------------------
+# AI parsing
+# ---------------------------------------------------------------------------
+
+_MAX_TEXT_CHARS = 24000
+
+
+async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
+    """Send PDF text to Ollama/Claude API and return parsed JSON."""
+    text = extract_pdf_text(pdf_bytes)
+    if len(text) > _MAX_TEXT_CHARS:
+        text = text[:_MAX_TEXT_CHARS] + " ...[截断]"
+
+    ollama_base = getattr(settings, "ollama_base_url", None) or "http://ollama:11434"
+    model = getattr(settings, "ollama_model", None) or "qwen2.5:72b-instruct-q4_K_M"
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": _USER_TEMPLATE.format(pdf_text=text)},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1},
+    }
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resp = await client.post(f"{ollama_base}/api/chat", json=payload)
+        resp.raise_for_status()
+        raw = resp.json()["message"]["content"].strip()
+
+    return _parse_json_response(raw)
+
+
+def _parse_json_response(raw: str) -> dict:
+    """Strip markdown fences and parse JSON."""
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        # Drop first (```json) and last (```) fence lines
+        inner = lines[1:] if lines[0].startswith("```") else lines
+        if inner and inner[-1].strip() == "```":
+            inner = inner[:-1]
+        raw = "\n".join(inner)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"parse_error": True, "raw_text": raw}
+
+
+# ---------------------------------------------------------------------------
+# Database helpers
+# ---------------------------------------------------------------------------
+
+
+def serialize_pdf_batch(batch: PdfImportBatch) -> dict:
+    return {
+        "id": batch.id,
+        "account_id": batch.account_id,
+        "snapshot_date": batch.snapshot_date.isoformat() if batch.snapshot_date else None,
+        "filename": batch.filename,
+        "status": batch.status,
+        "failed_reason": batch.failed_reason,
+        "ai_model": batch.ai_model,
+        "parsed_data": batch.parsed_result,
+        "confirmed_data": batch.confirmed_result,
+        "pending_deposits": batch.pending_deposit_rows,
+        "created_at": batch.created_at.isoformat() if batch.created_at else None,
+    }
+
+
+def confirm_pdf_batch(db, batch_id: int) -> PdfImportBatch:
+    """Write confirmed positions/cash into DB from a PDF batch."""
+    from sqlalchemy.orm import Session as _Session
+
+    batch = db.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
+    if not batch:
+        raise ValueError(f"PDF import batch {batch_id} not found.")
+    if batch.status not in ("parsed", "confirmed"):
+        raise ValueError("Only parsed batches can be confirmed.")
+
+    data = batch.confirmed_result if batch.confirmed_result else batch.parsed_result
+    if not data:
+        raise ValueError("No parsed data found.")
+
+    snap_date = batch.snapshot_date
+
+    # Upsert positions
+    for p in data.get("positions", []):
+        asset_code = str(p.get("asset_code", "")).strip().upper()
+        if not asset_code:
+            continue
+        qty = Decimal(str(p.get("quantity", 0)))
+        avg_cost = Decimal(str(p.get("average_cost", 0)))
+        currency = str(p.get("currency", "USD")).upper()
+        existing = db.query(Position).filter_by(
+            account_id=batch.account_id, asset_code=asset_code, snapshot_date=snap_date
+        ).first()
+        if existing:
+            existing.quantity = qty
+            existing.average_cost = avg_cost
+            existing.currency = currency
+        else:
+            db.add(Position(
+                account_id=batch.account_id,
+                asset_code=asset_code,
+                quantity=qty,
+                average_cost=avg_cost,
+                currency=currency,
+                snapshot_date=snap_date,
+            ))
+
+    # Upsert cash positions
+    for c in data.get("cash_balances", []):
+        currency = str(c.get("currency", "USD")).upper()
+        amount = Decimal(str(c.get("balance", 0)))
+        existing = db.query(CashPosition).filter_by(
+            account_id=batch.account_id, currency=currency, snapshot_date=snap_date
+        ).first()
+        if existing:
+            existing.amount = amount
+        else:
+            db.add(CashPosition(
+                account_id=batch.account_id,
+                currency=currency,
+                amount=amount,
+                snapshot_date=snap_date,
+                note="pdf_import",
+            ))
+
+    # Store capital events as pending deposits
+    capital_events = data.get("capital_events", [])
+    if capital_events:
+        batch.pending_deposits = json.dumps(capital_events)
+        batch.status = "confirmed_pending_deposits"
+    else:
+        batch.status = "confirmed"
+
+    db.commit()
+    db.refresh(batch)
+    return batch

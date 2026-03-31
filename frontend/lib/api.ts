@@ -40,7 +40,7 @@ type Pagination = {
   total: number;
 };
 
-type ApiListResponse<T> = {
+export type ApiListResponse<T> = {
   items: T[];
   pagination: Pagination;
 };
@@ -734,6 +734,112 @@ export async function createSeedCapital(fundId: number, payload: { client_id?: n
 
 export async function activateFund(fundId: number) {
   return fetchJson<Fund>(`/fund/${fundId}/activate`, { method: 'POST' });
+}
+
+// --- Exchange Rate ---
+
+export type ExchangeRate = {
+  id: number;
+  base_currency: string;
+  quote_currency: string;
+  rate: number;
+  snapshot_date: string;
+  source?: string | null;
+};
+
+export async function getRates(params?: { page?: number; size?: number; base?: string; quote?: string; snapshot_date?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<ExchangeRate>>(`/rates${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, base: params?.base, quote: params?.quote, snapshot_date: params?.snapshot_date })}`, { accessToken: params?.accessToken });
+}
+
+export async function upsertRateManual(payload: { base: string; quote: string; rate: number; snapshot_date: string }) {
+  return fetchJson<ExchangeRate>('/rates/manual', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function fetchRateFromApi(payload: { base: string; quote: string; snapshot_date: string }) {
+  return fetchJson<ExchangeRate>('/rates/fetch', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function importRatesCsv(file: File) {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetchJson<{ imported: number }>('/rates/csv', { method: 'POST', body: fd });
+}
+
+export async function checkNavRates(fundId: number, navDate: string, accessToken?: string | null) {
+  return fetchJson<{ ready: boolean; missing_rates: string[]; assets_affected: string[] }>(`/nav/check-rates${buildQuery({ fund_id: fundId, nav_date: navDate })}`, { accessToken });
+}
+
+// --- Asset Price ---
+
+export type AssetPrice = {
+  id: number;
+  asset_code: string;
+  price_usd: number;
+  source: string;
+  snapshot_date: string;
+};
+
+export async function getPrices(params?: { page?: number; size?: number; asset_code?: string; snapshot_date?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<AssetPrice>>(`/price${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, asset_code: params?.asset_code, snapshot_date: params?.snapshot_date })}`, { accessToken: params?.accessToken });
+}
+
+export async function upsertPriceManual(payload: { asset_code: string; price_usd: number; snapshot_date: string }) {
+  return fetchJson<AssetPrice>('/price/manual', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function importPricesCsv(file: File) {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetchJson<{ imported: number }>('/price/csv', { method: 'POST', body: fd });
+}
+
+// --- PDF Import ---
+
+export type PdfImportBatchRecord = {
+  id: number;
+  account_id: number;
+  snapshot_date: string;
+  filename?: string | null;
+  status: string;
+  failed_reason?: string | null;
+  ai_model?: string | null;
+  parsed_data?: Record<string, any>;
+  confirmed_data?: Record<string, any>;
+  pending_deposits?: any[];
+  created_at?: string | null;
+};
+
+export async function listPdfBatches(params?: { accountId?: number; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<PdfImportBatchRecord>>(`/pdf-import${buildQuery({ account_id: params?.accountId, size: 100 })}`, { accessToken: params?.accessToken });
+}
+
+export async function getPdfBatch(batchId: number, accessToken?: string | null) {
+  return fetchJson<PdfImportBatchRecord>(`/pdf-import/${batchId}`, { accessToken });
+}
+
+export async function uploadPdfBatch(payload: { accountId: number; snapshotDate: string; file: File }) {
+  const fd = new FormData();
+  fd.append('account_id', String(payload.accountId));
+  fd.append('snapshot_date', payload.snapshotDate);
+  fd.append('file', payload.file);
+  return fetchJson<PdfImportBatchRecord>('/pdf-import/upload', { method: 'POST', body: fd });
+}
+
+export async function confirmPdfBatch(batchId: number, confirmedData?: Record<string, any>) {
+  return fetchJson<PdfImportBatchRecord>(`/pdf-import/${batchId}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ confirmed_data: confirmedData ?? null }),
+  });
+}
+
+export async function resetPdfBatch(batchId: number) {
+  return fetchJson<PdfImportBatchRecord>(`/pdf-import/${batchId}`, { method: 'DELETE' });
+}
+
+// --- SHR-02: Share transaction undo ---
+
+export async function deleteShareTx(shareTxId: number) {
+  return fetchJson<{ deleted: boolean }>(`/shares/${shareTxId}`, { method: 'DELETE' });
 }
 
 export { API_BASE, PUBLIC_API_BASE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, LOCALE_COOKIE, buildQuery, fetchJson };

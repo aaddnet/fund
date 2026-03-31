@@ -155,3 +155,21 @@ class NavRebuildRequest(BaseModel):
     end_date: date
     frequency: str = "quarterly"  # 'quarterly' / 'yearly' / 'monthly'
     force: bool = False
+
+
+class PriceManualRequest(BaseModel):
+    asset_code: str
+    price_usd: Decimal
+    snapshot_date: date
+
+    @field_validator("asset_code")
+    @classmethod
+    def normalize_asset(cls, v: str) -> str:
+        return v.strip().upper()
+
+
+class PdfImportConfirmRequest(BaseModel):
+    confirmed_data: Optional[dict] = None  # user-edited positions/cash/capital_events
+
+    class Config:
+        arbitrary_types_allowed = True

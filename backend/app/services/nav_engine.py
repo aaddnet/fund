@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import calendar
+import logging
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal, getcontext
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # Explicit precision context for NAV calculations involving large position quantities.
 getcontext().prec = 28
@@ -89,6 +92,7 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
     rate_map = _build_rate_map(db, nav_date)
 
     total_assets_usd = ZERO
+    missing_rates: set[str] = set()
     grouped_snapshots: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {
             "quantity": ZERO,
@@ -103,6 +107,9 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
 
     for position in positions:
         valuation = _value_position(position, price_map, rate_map)
+        if valuation is None:
+            missing_rates.add(f"{position.currency.upper()}/USD")
+            continue
         total_assets_usd += valuation["value_usd"]
 
         # 注意这里按 asset + currency 聚合快照，方便 V1 页面快速看持仓结构，
@@ -146,7 +153,11 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
     )
     cash_total = ZERO
     for cr in cash_rows:
-        cash_total += _resolve_rate_to_usd(cr.currency.upper(), rate_map) * Decimal(str(cr.amount))
+        rate = _resolve_rate_to_usd(cr.currency.upper(), rate_map)
+        if rate is None:
+            missing_rates.add(f"{cr.currency.upper()}/USD")
+            continue
+        cash_total += rate * Decimal(str(cr.amount))
     positions_total = total_assets_usd
     total_assets_usd += cash_total
 
@@ -155,6 +166,9 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
         # V1 允许先算出总资产，再由后续 share 流程逐步补齐份额。
         total_shares = Decimal("1")
     nav_per_share = total_assets_usd / total_shares if total_shares else ZERO
+
+    if missing_rates:
+        logger.warning("NAV %s fund %s: skipped assets with missing FX rates: %s", nav_date, fund_id, sorted(missing_rates))
 
     nav = NAVRecord(
         fund_id=fund_id,
@@ -242,6 +256,73 @@ def _generate_nav_dates(start: date, end: date, frequency: str) -> list[date]:
     return sorted(dates)
 
 
+def check_nav_rates(db: Session, fund_id: int, nav_date) -> dict:
+    """Pre-flight: return which FX rates are missing for a NAV calculation."""
+    account_ids = [row[0] for row in db.query(Account.id).filter(Account.fund_id == fund_id).all()]
+    if not account_ids:
+        return {"ready": True, "missing_rates": [], "assets_affected": []}
+
+    rate_map = _build_rate_map(db, nav_date)
+
+    # Collect unique currencies from positions
+    currencies_used: dict[str, list[str]] = {}  # currency -> asset_codes
+    from sqlalchemy import func as _func
+    latest_subq = (
+        db.query(
+            Position.account_id,
+            Position.asset_code,
+            _func.max(Position.snapshot_date).label("max_date"),
+        )
+        .filter(Position.account_id.in_(account_ids), Position.snapshot_date <= nav_date)
+        .group_by(Position.account_id, Position.asset_code)
+        .subquery()
+    )
+    positions = (
+        db.query(Position)
+        .join(latest_subq, and_(
+            Position.account_id == latest_subq.c.account_id,
+            Position.asset_code == latest_subq.c.asset_code,
+            Position.snapshot_date == latest_subq.c.max_date,
+        ))
+        .all()
+    )
+    for p in positions:
+        ccy = p.currency.upper()
+        if ccy not in currencies_used:
+            currencies_used[ccy] = []
+        currencies_used[ccy].append(p.asset_code)
+
+    # Check cash currencies too
+    cash_subq = (
+        db.query(CashPosition.account_id, CashPosition.currency, _func.max(CashPosition.snapshot_date).label("max_date"))
+        .filter(CashPosition.account_id.in_(account_ids), CashPosition.snapshot_date <= nav_date)
+        .group_by(CashPosition.account_id, CashPosition.currency)
+        .subquery()
+    )
+    cash_rows = db.query(CashPosition).join(cash_subq, and_(
+        CashPosition.account_id == cash_subq.c.account_id,
+        CashPosition.currency == cash_subq.c.currency,
+        CashPosition.snapshot_date == cash_subq.c.max_date,
+    )).all()
+    for cr in cash_rows:
+        ccy = cr.currency.upper()
+        if ccy not in currencies_used:
+            currencies_used[ccy] = []
+
+    missing_rates = []
+    assets_affected = []
+    for ccy, assets in currencies_used.items():
+        if _resolve_rate_to_usd(ccy, rate_map) is None:
+            missing_rates.append(f"{ccy}/USD")
+            assets_affected.extend(assets)
+
+    return {
+        "ready": len(missing_rates) == 0,
+        "missing_rates": missing_rates,
+        "assets_affected": sorted(set(assets_affected)),
+    }
+
+
 def list_nav(db: Session, fund_id: Optional[int] = None):
     query = db.query(NAVRecord)
     if fund_id is not None:
@@ -249,7 +330,7 @@ def list_nav(db: Session, fund_id: Optional[int] = None):
     return query.order_by(NAVRecord.nav_date.desc(), NAVRecord.id.desc()).all()
 
 
-def _value_position(position: Position, price_map: dict[str, AssetPrice], rate_map: dict[tuple[str, str], Decimal]) -> dict[str, Decimal]:
+def _value_position(position: Position, price_map: dict[str, AssetPrice], rate_map: dict[tuple[str, str], Decimal]) -> Optional[dict[str, Decimal]]:
     asset_code = position.asset_code.upper()
     currency = position.currency.upper()
     quantity = Decimal(str(position.quantity))
@@ -257,6 +338,8 @@ def _value_position(position: Position, price_map: dict[str, AssetPrice], rate_m
     price_row = price_map.get(asset_code)
 
     fx_rate_to_usd = _resolve_rate_to_usd(currency, rate_map)
+    if fx_rate_to_usd is None:
+        return None
     if price_row is not None:
         price_usd = Decimal(str(price_row.price_usd))
         value_usd = quantity * price_usd
@@ -286,7 +369,7 @@ def _build_rate_map(db: Session, snapshot_date) -> dict[tuple[str, str], Decimal
     }
 
 
-def _resolve_rate_to_usd(currency: str, rate_map: dict[tuple[str, str], Decimal]) -> Decimal:
+def _resolve_rate_to_usd(currency: str, rate_map: dict[tuple[str, str], Decimal]) -> Optional[Decimal]:
     if currency == USD:
         return Decimal("1")
 
@@ -298,4 +381,5 @@ def _resolve_rate_to_usd(currency: str, rate_map: dict[tuple[str, str], Decimal]
     if inverse:
         return Decimal("1") / inverse
 
-    raise ValueError(f"Missing FX rate for {currency}/USD on NAV snapshot date.")
+    logger.warning("Missing FX rate for %s/USD — asset skipped in NAV calculation", currency)
+    return None

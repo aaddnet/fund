@@ -76,6 +76,7 @@ class Position(Base, TimestampMixin):
     average_cost = Column(Numeric(24, 8))
     currency = Column(String(10), nullable=False)
     snapshot_date = Column(Date, nullable=False)
+    source_batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
 
 
 class ImportBatch(Base, TimestampMixin):
@@ -98,6 +99,7 @@ class ImportBatch(Base, TimestampMixin):
     failed_reason = Column(Text)
     preview_json = Column(Text, nullable=False, default="[]")
     pending_deposits = Column(Text)  # JSON list of deposit rows awaiting capital-event confirmation
+    file_hash = Column(String(64), nullable=True)  # SHA256 of uploaded file, for dedup detection
     imported_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     @property
@@ -141,6 +143,7 @@ class ExchangeRate(Base, TimestampMixin):
     quote_currency = Column(String(10), nullable=False)
     rate = Column(Numeric(20, 8), nullable=False)
     snapshot_date = Column(Date, nullable=False)
+    source = Column(String(50), nullable=True)  # data source: manual / frankfurter / csv
 
 
 class AssetPrice(Base, TimestampMixin):
@@ -311,6 +314,7 @@ class CashPosition(Base, TimestampMixin):
     amount = Column(Numeric(24, 8), nullable=False)
     snapshot_date = Column(Date, nullable=False)
     note = Column(String(255))
+    source_batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
 
 
 class ShareRegister(Base, TimestampMixin):
@@ -341,3 +345,43 @@ class ClientCapitalAccount(Base, TimestampMixin):
     current_shares = Column(Numeric(24, 8), nullable=False, default=0)
     unrealized_pnl_usd = Column(Numeric(24, 8))
     last_updated_date = Column(Date)
+
+
+class PdfImportBatch(Base, TimestampMixin):
+    """Tracks PDF annual-statement import batches (year-end snapshot workflow)."""
+    __tablename__ = "pdf_import_batch"
+    __table_args__ = (
+        Index("idx_pdf_import_batch_account_id", "account_id"),
+        Index("idx_pdf_import_batch_status", "status"),
+    )
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
+    snapshot_date = Column(Date, nullable=False)  # year-end date, e.g. 2023-12-31
+    filename = Column(String(255))
+    status = Column(String(30), nullable=False, default="uploaded")  # uploaded / parsed / confirmed / failed / reset
+    parsed_data = Column(Text)   # JSON: AI-extracted positions/cash/capital_events
+    confirmed_data = Column(Text)  # JSON: user-confirmed data (after inline edits)
+    pending_deposits = Column(Text)  # JSON: capital events awaiting confirmation
+    failed_reason = Column(Text)
+    ai_model = Column(String(100))  # model used for parsing, e.g. qwen2.5:72b
+
+    @property
+    def parsed_result(self) -> dict:
+        try:
+            return json.loads(self.parsed_data or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    @property
+    def confirmed_result(self) -> dict:
+        try:
+            return json.loads(self.confirmed_data or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    @property
+    def pending_deposit_rows(self) -> list:
+        try:
+            return json.loads(self.pending_deposits or "[]")
+        except json.JSONDecodeError:
+            return []

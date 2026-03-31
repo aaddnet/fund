@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 from collections import defaultdict
@@ -82,11 +83,17 @@ def upload_csv(db: Session, source: str, filename: str, account_id: int, content
     if not account:
         raise ValueError(f"Account {account_id} does not exist.")
 
+    file_hash = hashlib.sha256(content).hexdigest()
+    existing = db.query(ImportBatch).filter(ImportBatch.file_hash == file_hash).first()
+    if existing:
+        raise ValueError(f"duplicate_file:{existing.id}")
+
     batch = ImportBatch(
         source=source.lower().strip() or "csv",
         filename=filename,
         account_id=account_id,
         status=IMPORT_STATUS_UPLOADED,
+        file_hash=file_hash,
         imported_at=datetime.now(timezone.utc),
     )
     db.add(batch)
@@ -165,11 +172,12 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
                 average_cost=position["average_cost"],
                 currency=position["currency"],
                 snapshot_date=position["snapshot_date"],
+                source_batch_id=batch.id,
             )
         )
 
     # Generate CashPosition snapshots from forex/cash transactions
-    _build_cash_positions(db, batch.account_id, trade_rows)
+    _build_cash_positions(db, batch.account_id, trade_rows, source_batch_id=batch.id)
 
     # Store deposit rows in pending_deposits for manual confirmation
     if deposit_rows:
@@ -213,12 +221,14 @@ def serialize_batch(batch: ImportBatch) -> dict[str, Any]:
 
 
 def reset_batch(db: Session, batch_id: int) -> ImportBatch:
-    """Roll back all data created by this import batch."""
+    """Roll back all data created by this import batch (transactions, positions, cash positions)."""
     batch = get_batch(db, batch_id)
     if not batch:
         raise ValueError(f"Import batch {batch_id} was not found.")
 
     db.query(Transaction).filter(Transaction.import_batch_id == batch_id).delete()
+    db.query(Position).filter(Position.source_batch_id == batch_id).delete()
+    db.query(CashPosition).filter(CashPosition.source_batch_id == batch_id).delete()
     batch.pending_deposits = None
     batch.status = "reset"
     batch.confirmed_count = 0
@@ -335,7 +345,7 @@ def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> lis
     return sorted(positions, key=lambda row: (row["snapshot_date"], row["asset_code"], row["currency"]))
 
 
-def _build_cash_positions(db: Session, account_id: int, preview_rows: list[dict[str, Any]]) -> None:
+def _build_cash_positions(db: Session, account_id: int, preview_rows: list[dict[str, Any]], source_batch_id: Optional[int] = None) -> None:
     """
     Build CashPosition snapshots from forex/cash rows.
 
@@ -392,6 +402,7 @@ def _build_cash_positions(db: Session, account_id: int, preview_rows: list[dict[
                 amount=delta,
                 snapshot_date=snap_date,
                 note="auto_from_import",
+                source_batch_id=source_batch_id,
             ))
 
 

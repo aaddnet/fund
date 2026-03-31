@@ -48,6 +48,7 @@ export default function Layout({ title, children, subtitle, requiredPermission }
       items: [
         { href: '/accounts', label: t('accounts'), requiredPermission: 'accounts.read' },
         { href: '/import', label: t('import'), requiredPermission: 'import.read' },
+        { href: '/pdf-import', label: 'PDF 年度账单', requiredPermission: 'import.read' },
         { href: '/cash', label: t('cash'), requiredPermission: 'nav.read' },
       ],
     },

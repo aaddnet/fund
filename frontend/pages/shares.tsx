@@ -90,6 +90,20 @@ export default function Page({ shares, balances, funds, clients, navRecords = []
   const fundMap = useMemo(() => Object.fromEntries(funds.map(f => [f.id, f.name])), [funds]);
   const clientMap = useMemo(() => Object.fromEntries(clients.map(c => [c.id, c.name])), [clients]);
 
+  // SHR-01: per-client history filter
+  const [historyClientId, setHistoryClientId] = useState<string>('');
+  const filteredRows = useMemo(
+    () => historyClientId ? rows.filter(r => String(r.client_id) === historyClientId) : rows,
+    [rows, historyClientId],
+  );
+  const clientSummary = useMemo(() => {
+    if (!historyClientId) return null;
+    const txs = rows.filter(r => String(r.client_id) === historyClientId);
+    const totalIn = txs.filter(r => r.tx_type === 'subscribe' || r.tx_type === 'seed').reduce((s, r) => s + r.amount_usd, 0);
+    const totalOut = txs.filter(r => r.tx_type === 'redeem').reduce((s, r) => s + r.amount_usd, 0);
+    return { txCount: txs.length, totalIn, totalOut, net: totalIn - totalOut };
+  }, [rows, historyClientId]);
+
   function openModal(newMode: FormMode) {
     setMode(newMode);
     setIsModalOpen(true);
@@ -222,11 +236,52 @@ export default function Page({ shares, balances, funds, clients, navRecords = []
         </div>
       </div>
 
+      {/* SHR-01: Per-Client History */}
       <div style={{ ...styles.card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>{t('shareLedger')}</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0, flex: 1 }}>{t('shareLedger')}</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ ...styles.label, margin: 0, fontSize: 13 }}>按客户筛选:</label>
+            <select
+              style={{ ...styles.input, width: 180 }}
+              value={historyClientId}
+              onChange={e => setHistoryClientId(e.target.value)}
+            >
+              <option value=''>全部客户</option>
+              {clients.map(c => (
+                <option key={c.id} value={String(c.id)}>#{c.id} {c.name}</option>
+              ))}
+            </select>
+            {historyClientId && (
+              <button style={{ ...styles.buttonSecondary, padding: '4px 8px', fontSize: 12 }} onClick={() => setHistoryClientId('')}>
+                清除
+              </button>
+            )}
+          </div>
+        </div>
+        {clientSummary && (
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+            <div style={{ ...styles.card, padding: '10px 16px', background: '#f0fdf4', border: `1px solid #bbf7d0`, flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 12, color: colors.muted }}>累计认购</div>
+              <div style={{ fontWeight: 700, color: colors.success }}>{formatNumber(clientSummary.totalIn)}</div>
+            </div>
+            <div style={{ ...styles.card, padding: '10px 16px', background: '#fef2f2', border: `1px solid #fecaca`, flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 12, color: colors.muted }}>累计赎回</div>
+              <div style={{ fontWeight: 700, color: colors.danger }}>{formatNumber(clientSummary.totalOut)}</div>
+            </div>
+            <div style={{ ...styles.card, padding: '10px 16px', background: '#eff6ff', border: `1px solid #bfdbfe`, flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 12, color: colors.muted }}>净认购</div>
+              <div style={{ fontWeight: 700, color: colors.primary }}>{formatNumber(clientSummary.net)}</div>
+            </div>
+            <div style={{ ...styles.card, padding: '10px 16px', flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 12, color: colors.muted }}>交易笔数</div>
+              <div style={{ fontWeight: 700 }}>{clientSummary.txCount}</div>
+            </div>
+          </div>
+        )}
         <ProductTable
           emptyText={t('noShareTransactions')}
-          rows={rows}
+          rows={filteredRows}
           columns={[
             { key: 'date', title: t('date'), render: (item) => item.tx_date },
             { key: 'type', title: t('type'), render: (item) => {

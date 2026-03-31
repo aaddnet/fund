@@ -260,6 +260,42 @@ export default function Page({ report, funds, clients, filters, error }: Props) 
         <StatCard label={t('transactions')} value={String(report?.summary.transaction_count ?? 0)} />
       </div>
 
+      {/* RPT-01: Fund Overview Summary */}
+      {report && report.breakdowns.nav_by_fund.length > 0 && (
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <h3 style={{ marginTop: 0, marginBottom: 12 }}>基金总览 (Fund Overview)</h3>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+            {report.breakdowns.nav_by_fund.map(f => {
+              const fundName = funds.find(fn => fn.id === f.fund_id)?.name ?? `Fund #${f.fund_id}`;
+              return (
+                <div key={f.fund_id} style={{ flex: '1 1 200px', border: `1px solid ${colors.border}`, borderRadius: 10, padding: '14px 18px', background: '#fff' }}>
+                  <div style={{ fontSize: 11, color: colors.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6 }}>{fundName}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: colors.primary, marginBottom: 2 }}>
+                    {formatNumber(f.latest_total_assets_usd)}
+                  </div>
+                  <div style={{ fontSize: 12, color: colors.muted }}>AUM (USD)</div>
+                  <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: colors.muted }}>NAV / 份</div>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{formatNumber(f.latest_nav_per_share, 6)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: colors.muted }}>最新日期</div>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{f.latest_nav_date ?? '—'}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 12, color: colors.muted }}>
+            合计 AUM: <strong>{formatNumber(report.breakdowns.nav_by_fund.reduce((s, f) => s + (f.latest_total_assets_usd ?? 0), 0))}</strong> USD
+            &nbsp;·&nbsp; {report.breakdowns.nav_by_fund.length} 个基金
+            &nbsp;·&nbsp; 期间: {report.filters.date_from} → {report.filters.date_to}
+          </div>
+        </div>
+      )}
+
       <div style={{ ...styles.grid2, marginTop: 16 }}>
         <div style={styles.card}>
           <h3 style={{ marginTop: 0 }}>Share Flow Trend</h3>
