@@ -51,8 +51,8 @@ _SECTION_KEYWORDS = [
     "statement of", "portfolio", "holdings",
 ]
 
-_MAX_SECTION_CHARS = 5000   # per section
-_MAX_TOTAL_CHARS = 8000     # total input to LLM
+_MAX_SECTION_CHARS = 2000   # per section
+_MAX_TOTAL_CHARS = 3000     # total input to LLM — keep within thinking model token budget
 
 
 def extract_pdf_text(pdf_bytes: bytes) -> str:
@@ -129,7 +129,7 @@ async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
             {"role": "user", "content": user_content},
         ],
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 2048},
+        "options": {"temperature": 0.1, "num_predict": 4096, "num_ctx": 8192},
     }
 
     async with httpx.AsyncClient(timeout=300.0) as client:
