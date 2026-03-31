@@ -58,6 +58,7 @@ _JPEG_QUALITY = 85   # JPEG quality; 85 keeps table text legible, 5-10× smaller
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
+    "/no_think "  # disable qwen3 thinking mode — prevents token explosion
     "You are a financial statement data extraction API. "
     "Output ONLY valid JSON. No prose, no markdown fences, no explanation."
 )
@@ -361,8 +362,9 @@ async def ask_ai(
                 "images": images_b64,
             },
         ],
-        "stream": False,
-        "options": {"temperature": 0.1, "num_ctx": 8192},
+        "stream": True,   # streaming: each token resets the read-timeout clock
+        "think": False,   # suppress qwen3 reasoning chain
+        "options": {"temperature": 0.1, "num_ctx": 8192, "num_predict": 2048},
     }
 
     # AI-05: attach JSON Schema if supported (Ollama >= 0.5 for object format)
@@ -374,11 +376,27 @@ async def ask_ai(
         len(images_b64), ollama_base, model, prompt_type,
     )
 
-    _timeout = httpx.Timeout(connect=30.0, read=900.0, write=120.0, pool=30.0)
+    # Use per-chunk timeout: model only needs to produce a token every 120s
+    _timeout = httpx.Timeout(connect=30.0, read=120.0, write=120.0, pool=30.0)
+    raw_parts: list[str] = []
+
     async with httpx.AsyncClient(timeout=_timeout) as client:
-        resp = await client.post(f"{ollama_base}/api/chat", json=payload)
-        resp.raise_for_status()
-        raw = resp.json()["message"]["content"]
+        async with client.stream("POST", f"{ollama_base}/api/chat", json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                delta = chunk.get("message", {}).get("content", "")
+                if delta:
+                    raw_parts.append(delta)
+                if chunk.get("done"):
+                    break
+
+    raw = "".join(raw_parts)
 
     logger.info("Vision model raw (first 400): %s", raw[:400])
     return _parse_json_response(raw)
