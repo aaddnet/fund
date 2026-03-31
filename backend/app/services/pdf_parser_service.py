@@ -48,8 +48,9 @@ SKIP_KEYWORDS = [
     "风险提示", "免责声明", "声明",
 ]
 
-_DPI = 150           # 150 DPI balances legibility vs image size (~600KB/page)
-_BATCH_SIZE = 3      # pages per AI call; 3×150DPI ≈ 6MB base64, safe for local GPU
+_DPI = 100           # 100 DPI + JPEG compression ≈ 80KB/page (safe for local models)
+_BATCH_SIZE = 1      # 1 page per AI call — avoids ReadTimeout on CPU/slow GPU
+_JPEG_QUALITY = 85   # JPEG quality; 85 keeps table text legible, 5-10× smaller than PNG
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +296,11 @@ def classify_pages(pdf_bytes: bytes) -> dict:
 # ---------------------------------------------------------------------------
 
 def render_pages_to_images(pdf_bytes: bytes, page_indices: list[int], dpi: int = _DPI) -> list[str]:
-    """Render specified PDF pages to PNG, return list of base64-encoded strings."""
+    """Render specified PDF pages to JPEG (compressed), return list of base64-encoded strings.
+
+    JPEG at quality=85 is ~5-10× smaller than PNG, dramatically reducing
+    the payload sent to the vision model and preventing ReadTimeout.
+    """
     try:
         import fitz
     except ImportError:
@@ -310,9 +315,15 @@ def render_pages_to_images(pdf_bytes: bytes, page_indices: list[int], dpi: int =
         if i >= len(doc):
             continue
         pix = doc[i].get_pixmap(matrix=mat, colorspace=fitz.csRGB)
-        images.append(base64.b64encode(pix.tobytes("png")).decode())
+        # Encode as JPEG for compact payload; fall back to PNG on error
+        try:
+            img_bytes = pix.tobytes("jpeg", jpg_quality=_JPEG_QUALITY)
+        except Exception:
+            img_bytes = pix.tobytes("png")
+        images.append(base64.b64encode(img_bytes).decode())
+        kb = len(img_bytes) // 1024
+        logger.info("Page %d rendered: %d DPI, %d KB", i, dpi, kb)
 
-    logger.info("Rendered %d page(s) at %d DPI: indices=%s", len(images), dpi, page_indices)
     return images
 
 
