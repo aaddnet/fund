@@ -1,21 +1,19 @@
 """PDF annual statement parser service.
 
 Extracts text from PDF using PyMuPDF, then calls a local Ollama-compatible
-LLM (or Claude API as fallback) to produce structured JSON with positions,
-cash balances, and capital events.
+LLM to produce structured JSON with positions, cash balances, and capital events.
 """
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+import re
 from decimal import Decimal
 
 import httpx
 
 from app.core.config import settings
-from app.db import SessionLocal
-from app.models import Account, CashPosition, PdfImportBatch, Position
+from app.models import CashPosition, PdfImportBatch, Position
 
 logger = logging.getLogger(__name__)
 
@@ -24,31 +22,37 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "You are a JSON-only financial data extraction API. "
-    "Never write prose. Never explain. Output only the JSON continuation."
+    "You are a financial data extraction API. "
+    "Output ONLY valid JSON. No prose, no markdown, no explanation."
 )
 
-# /no_think suppresses qwen3 chain-of-thought; {pdf_text} is replaced via str.replace
 _USER_TEMPLATE = """\
-/no_think
-From the broker statement below, fill in and return ONLY the following JSON (no extra text):
+Extract structured data from this broker statement and return JSON with exactly these fields:
+- account_info: {account_no, broker, base_currency}
+- statement_end_date: YYYY-MM-DD string
+- positions: array of {asset_code, asset_name, quantity, average_cost, currency, market_value, asset_type}
+- cash_balances: array of {currency, balance}
+- capital_events: array of {date, type (deposit/withdrawal), amount, currency, note}
+- parsing_confidence: "high", "medium", or "low"
 
-{
-  "account_info": {"account_no": "", "broker": "", "base_currency": "USD"},
-  "statement_end_date": "YYYY-MM-DD",
-  "positions": [{"asset_code": "", "asset_name": "", "quantity": 0.0, "average_cost": 0.0, "currency": "USD", "market_value": 0.0, "asset_type": "stock"}],
-  "cash_balances": [{"currency": "USD", "balance": 0.0}],
-  "capital_events": [{"date": "", "type": "deposit", "amount": 0.0, "currency": "USD", "note": ""}],
-  "parsing_confidence": "high"
-}
-
-Statement:
+Statement text:
 {pdf_text}
 """
 
 # ---------------------------------------------------------------------------
-# PDF text extraction
+# PDF text extraction + smart section trimming
 # ---------------------------------------------------------------------------
+
+# IBKR and common broker section keywords to extract
+_SECTION_KEYWORDS = [
+    "open position", "positions", "cash report", "ending cash",
+    "cash balance", "deposit", "withdrawal", "account information",
+    "account summary", "net asset value", "total equity",
+    "statement of", "portfolio", "holdings",
+]
+
+_MAX_SECTION_CHARS = 5000   # per section
+_MAX_TOTAL_CHARS = 8000     # total input to LLM
 
 
 def extract_pdf_text(pdf_bytes: bytes) -> str:
@@ -62,28 +66,60 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
     pages = []
     for i, page in enumerate(doc):
         blocks = page.get_text("blocks")
-        page_text = f"--- 第{i + 1}页 ---\n" + "\n".join(b[4] for b in blocks if b[6] == 0)
+        page_text = "\n".join(b[4] for b in blocks if b[6] == 0)
         pages.append(page_text)
     return "\n\n".join(pages)
+
+
+def _extract_key_sections(full_text: str) -> str:
+    """
+    Pull only the financially relevant sections from a full statement text.
+    Looks for known section headers and grabs up to _MAX_SECTION_CHARS chars after each.
+    Falls back to a plain truncation if no sections found.
+    """
+    lines = full_text.splitlines()
+    collected: list[str] = []
+    total = 0
+    in_section = False
+    section_chars = 0
+
+    for line in lines:
+        lower = line.lower()
+        is_header = any(kw in lower for kw in _SECTION_KEYWORDS)
+
+        if is_header:
+            in_section = True
+            section_chars = 0
+
+        if in_section:
+            collected.append(line)
+            section_chars += len(line) + 1
+            total += len(line) + 1
+            if section_chars >= _MAX_SECTION_CHARS:
+                in_section = False
+            if total >= _MAX_TOTAL_CHARS:
+                break
+
+    if total < 200:
+        # No recognisable sections found — fall back to plain truncation
+        return full_text[:_MAX_TOTAL_CHARS]
+
+    return "\n".join(collected)
 
 
 # ---------------------------------------------------------------------------
 # AI parsing
 # ---------------------------------------------------------------------------
 
-_MAX_TEXT_CHARS = 24000
-
-
 async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
-    """Send PDF text to Ollama/Claude API and return parsed JSON."""
-    text = extract_pdf_text(pdf_bytes)
-    if len(text) > _MAX_TEXT_CHARS:
-        text = text[:_MAX_TEXT_CHARS] + " ...[截断]"
+    """Send key PDF sections to Ollama and return parsed JSON."""
+    full_text = extract_pdf_text(pdf_bytes)
+    text = _extract_key_sections(full_text)
+    logger.info("PDF text: %d chars full → %d chars after section trim", len(full_text), len(text))
 
-    ollama_base = getattr(settings, "ollama_base_url", None) or "http://ollama:11434"
-    model = getattr(settings, "ollama_model", None) or "qwen3.5:latest"
+    ollama_base = settings.ollama_base_url
+    model = settings.ollama_model
 
-    # Use str.replace instead of .format() to avoid KeyError when PDF text contains { }
     user_content = _USER_TEMPLATE.replace("{pdf_text}", text)
 
     payload = {
@@ -91,40 +127,29 @@ async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
-            # Assistant priming: force the model to continue from '{' so it
-            # cannot output prose before the JSON object.
-            {"role": "assistant", "content": "{"},
         ],
         "stream": False,
-        "think": False,            # Suppress CoT for qwen3/deepseek-r1
-        "options": {"temperature": 0.1},
+        "options": {"temperature": 0.1, "num_predict": 2048},
     }
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         resp = await client.post(f"{ollama_base}/api/chat", json=payload)
         resp.raise_for_status()
-        data = resp.json()
-        # Prepend the priming character we sent as the assistant seed
-        raw = "{" + data["message"]["content"]
+        raw = resp.json()["message"]["content"]
 
-    logger.info("Ollama raw response (first 200 chars): %s", raw[:200])
+    logger.info("Ollama raw (first 300): %s", raw[:300])
     return _parse_json_response(raw)
 
 
 def _strip_think_tags(raw: str) -> str:
-    """Remove <think>...</think> blocks produced by reasoning models."""
-    import re
-    # Non-greedy strip of all <think> blocks
-    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-    return cleaned.strip()
+    return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
 
 def _parse_json_response(raw: str) -> dict:
-    """Strip thinking tags + markdown fences, then parse JSON."""
-    # Step 1: remove <think> blocks (qwen3, deepseek-r1, etc.)
+    """Strip think tags + markdown fences, extract first JSON object, parse."""
     raw = _strip_think_tags(raw)
 
-    # Step 2: strip markdown code fences
+    # Strip markdown code fences
     if raw.startswith("```"):
         lines = raw.split("\n")
         inner = lines[1:] if lines[0].startswith("```") else lines
@@ -132,18 +157,35 @@ def _parse_json_response(raw: str) -> dict:
             inner = inner[:-1]
         raw = "\n".join(inner).strip()
 
-    # Step 3: extract first JSON object/array if there's surrounding text
-    import re
-    if not raw.startswith(("{", "[")):
-        match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", raw)
-        if match:
-            raw = match.group(1)
+    # If still doesn't start with {, scan for first JSON object
+    if not raw.startswith("{"):
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if m:
+            raw = m.group(0)
 
+    # Try to fix truncated JSON by finding the last complete top-level key
     try:
         return json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.warning("JSON parse failed: %s | raw: %s", e, raw[:300])
+    except json.JSONDecodeError:
+        # Attempt to recover by truncating at the last complete field
+        truncated = _recover_truncated_json(raw)
+        if truncated:
+            return truncated
+        logger.warning("JSON parse failed | raw: %s", raw[:500])
         return {"parse_error": True, "raw_text": raw[:1000]}
+
+
+def _recover_truncated_json(raw: str) -> dict | None:
+    """Try progressively shorter strings until JSON parses (handles truncated output)."""
+    # Find the last } and try parsing up to it
+    last_brace = raw.rfind("}")
+    while last_brace > 0:
+        candidate = raw[:last_brace + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            last_brace = raw.rfind("}", 0, last_brace)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +211,6 @@ def serialize_pdf_batch(batch: PdfImportBatch) -> dict:
 
 def confirm_pdf_batch(db, batch_id: int) -> PdfImportBatch:
     """Write confirmed positions/cash into DB from a PDF batch."""
-    from sqlalchemy.orm import Session as _Session
-
     batch = db.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
     if not batch:
         raise ValueError(f"PDF import batch {batch_id} not found.")
@@ -183,7 +223,6 @@ def confirm_pdf_batch(db, batch_id: int) -> PdfImportBatch:
 
     snap_date = batch.snapshot_date
 
-    # Upsert positions
     for p in data.get("positions", []):
         asset_code = str(p.get("asset_code", "")).strip().upper()
         if not asset_code:
@@ -208,7 +247,6 @@ def confirm_pdf_batch(db, batch_id: int) -> PdfImportBatch:
                 snapshot_date=snap_date,
             ))
 
-    # Upsert cash positions
     for c in data.get("cash_balances", []):
         currency = str(c.get("currency", "USD")).upper()
         amount = Decimal(str(c.get("balance", 0)))
@@ -226,7 +264,6 @@ def confirm_pdf_batch(db, batch_id: int) -> PdfImportBatch:
                 note="pdf_import",
             ))
 
-    # Store capital events as pending deposits
     capital_events = data.get("capital_events", [])
     if capital_events:
         batch.pending_deposits = json.dumps(capital_events)

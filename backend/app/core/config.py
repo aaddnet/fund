@@ -36,7 +36,7 @@ class Settings:
     scheduler_fx_minute: int = int(os.getenv("SCHEDULER_FX_MINUTE", "0"))
     scheduler_fx_pairs: str = os.getenv("SCHEDULER_FX_PAIRS", "HKD:USD,SGD:USD,CNY:USD")
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen3.5:latest")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "deepseek-r1:14b")
 
     def __post_init__(self) -> None:
         raw_bootstrap = os.getenv(
