@@ -24,29 +24,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "你是专业券商账单数据提取助手。只输出JSON，不要解释。"
-    "金额为纯数字，日期格式YYYY-MM-DD。数量和价格保留小数。"
+    "You are a financial statement data extraction API. "
+    "You MUST output ONLY a single valid JSON object with no explanation, no markdown, no prose. "
+    "Rules: amounts are plain numbers, dates are YYYY-MM-DD, quantities keep decimals."
 )
 
 _USER_TEMPLATE = """\
-从以下账单提取数据，输出此JSON格式（不要包含注释）：
-{{
-  "account_info": {{"account_no": "", "broker": "", "base_currency": "USD"}},
-  "statement_end_date": "YYYY-MM-DD",
-  "positions": [
-    {{"asset_code": "", "asset_name": "", "quantity": 0.0,
-      "average_cost": 0.0, "currency": "USD", "market_value": 0.0,
-      "asset_type": "stock"}}
-  ],
-  "cash_balances": [{{"currency": "USD", "balance": 0.0}}],
-  "capital_events": [
-    {{"date": "", "type": "deposit", "amount": 0.0,
-      "currency": "USD", "note": ""}}
-  ],
-  "parsing_confidence": "high"
-}}
+/no_think
+Extract data from the broker statement below. Output ONLY this JSON object, nothing else:
+{"account_info":{"account_no":"","broker":"","base_currency":"USD"},"statement_end_date":"YYYY-MM-DD","positions":[{"asset_code":"","asset_name":"","quantity":0.0,"average_cost":0.0,"currency":"USD","market_value":0.0,"asset_type":"stock"}],"cash_balances":[{"currency":"USD","balance":0.0}],"capital_events":[{"date":"","type":"deposit","amount":0.0,"currency":"USD","note":""}],"parsing_confidence":"high"}
 
-账单内容：
+Statement text:
 {pdf_text}
 """
 
@@ -97,9 +85,9 @@ async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
             {"role": "user", "content": user_content},
         ],
         "stream": False,
+        "format": "json",          # Force JSON output mode (Ollama ≥0.1.9)
+        "think": False,            # Suppress CoT for qwen3/deepseek-r1
         "options": {"temperature": 0.1},
-        # Disable chain-of-thought for thinking models (qwen3, deepseek-r1, etc.)
-        "think": False,
     }
 
     async with httpx.AsyncClient(timeout=300.0) as client:
