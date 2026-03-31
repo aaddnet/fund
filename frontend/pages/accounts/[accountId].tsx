@@ -36,13 +36,6 @@ export default function Page({ account, positions, transactions, imports, cashPo
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('positions');
 
-  const tabs: { key: Tab; label: string; count: number }[] = [
-    { key: 'positions', label: t('tabPositions'), count: aggregatedPositions.length },
-    { key: 'transactions', label: t('tabTransactions'), count: transactions.length },
-    { key: 'imports', label: t('tabImports'), count: imports.length },
-    { key: 'cash', label: t('tabCash'), count: cashPositions.length },
-  ];
-
   // Aggregate positions by (asset_code, currency):
   // - quantity = sum of all snapshots
   // - average_cost = weighted average (total_cost / total_qty)
@@ -67,6 +60,13 @@ export default function Page({ account, positions, transactions, imports, cashPo
       .map(r => ({ asset_code: r.asset_code, currency: r.currency, quantity: r.total_qty, average_cost: r.total_qty !== 0 ? r.total_cost / r.total_qty : 0, snapshot_date: r.snapshot_date }))
       .sort((a, b) => a.asset_code.localeCompare(b.asset_code));
   }, [positions]);
+
+  const tabs: { key: Tab; label: string; count: number }[] = [
+    { key: 'positions', label: t('tabPositions'), count: aggregatedPositions.length },
+    { key: 'transactions', label: t('tabTransactions'), count: transactions.length },
+    { key: 'imports', label: t('tabImports'), count: imports.length },
+    { key: 'cash', label: t('tabCash'), count: cashPositions.length },
+  ];
 
   // Build price map: asset_code -> latest price_usd
   const priceMap = useMemo(() => {
