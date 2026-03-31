@@ -795,6 +795,22 @@ export async function importPricesCsv(file: File) {
 
 // --- PDF Import ---
 
+export type ValidationItem = {
+  asset_code: string;
+  ai_quantity: number;
+  db_quantity?: number;
+  diff_pct?: number;
+  level: 'error' | 'warning' | 'new';
+};
+
+export type ValidationResult = {
+  errors: ValidationItem[];
+  warnings: ValidationItem[];
+  new_positions: ValidationItem[];
+  can_auto_confirm: boolean;
+  summary: { total: number; matched: number; warnings: number; errors: number; new: number };
+};
+
 export type PdfImportBatchRecord = {
   id: number;
   account_id: number;
@@ -806,6 +822,7 @@ export type PdfImportBatchRecord = {
   parsed_data?: Record<string, any>;
   confirmed_data?: Record<string, any>;
   pending_deposits?: any[];
+  validation?: ValidationResult | null;
   created_at?: string | null;
 };
 

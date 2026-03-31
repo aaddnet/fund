@@ -6,6 +6,8 @@ import { useToast } from '../../components/Toast';
 import {
   Account,
   PdfImportBatchRecord,
+  ValidationItem,
+  ValidationResult,
   getAccounts,
   uploadPdfBatch,
   getPdfBatch,
@@ -102,6 +104,8 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
   const cashBalances: any[] = parsed.cash_balances ?? [];
   const capitalEvents: any[] = parsed.capital_events ?? [];
   const confidence: string = parsed.parsing_confidence ?? '';
+  const validation: ValidationResult | null | undefined = activeBatch?.validation ?? parsed._validation ?? null;
+  const hasErrors = (validation?.errors?.length ?? 0) > 0;
 
   return (
     <Layout title='PDF 年度账单导入' subtitle='上传券商年度 PDF 账单，AI 解析后人工确认写入' requiredPermission='import.write'>
@@ -171,7 +175,12 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
                 </h3>
                 <div style={{ display: 'flex', gap: 8 }}>
                   {activeBatch.status === 'parsed' && (
-                    <button style={styles.buttonPrimary} onClick={handleConfirm} disabled={confirming}>
+                    <button
+                      style={{ ...styles.buttonPrimary, ...(hasErrors ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                      onClick={handleConfirm}
+                      disabled={confirming || hasErrors}
+                      title={hasErrors ? '存在差异超过 20% 的持仓，请人工核查后再确认' : undefined}
+                    >
                       {confirming ? '写入中…' : '确认写入数据库'}
                     </button>
                   )}
@@ -202,6 +211,78 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
                 </div>
               )}
             </div>
+
+            {/* AI-02: Validation diff panel */}
+            {validation && activeBatch.status === 'parsed' && (
+              <div style={{ ...styles.card, marginBottom: 16 }}>
+                <h4 style={{ marginTop: 0, marginBottom: 12 }}>
+                  置信度校验
+                  {validation.summary && (
+                    <span style={{ fontSize: 12, color: colors.muted, fontWeight: 400, marginLeft: 8 }}>
+                      共 {validation.summary.total} 项持仓
+                      {validation.summary.matched > 0 && ` · ${validation.summary.matched} 项匹配`}
+                      {validation.summary.new > 0 && ` · ${validation.summary.new} 项新增`}
+                    </span>
+                  )}
+                </h4>
+
+                {validation.errors.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#dc2626', marginBottom: 6 }}>
+                      🔴 差异超过 20%，需人工确认（{validation.errors.length} 项）
+                    </div>
+                    {validation.errors.map((item) => (
+                      <div key={item.asset_code} style={{
+                        background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6,
+                        padding: '6px 12px', marginBottom: 4, fontSize: 13,
+                        display: 'flex', justifyContent: 'space-between',
+                      }}>
+                        <strong>{item.asset_code}</strong>
+                        <span>
+                          AI: <strong>{item.ai_quantity}</strong>
+                          {item.db_quantity !== undefined && <> · 系统: <strong>{item.db_quantity}</strong></>}
+                          {item.diff_pct !== undefined && <span style={{ color: '#dc2626', marginLeft: 8 }}>差异 {item.diff_pct}%</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {validation.warnings.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#d97706', marginBottom: 6 }}>
+                      ⚠️ 差异 5-20%，建议核查（{validation.warnings.length} 项）
+                    </div>
+                    {validation.warnings.map((item) => (
+                      <div key={item.asset_code} style={{
+                        background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 6,
+                        padding: '6px 12px', marginBottom: 4, fontSize: 13,
+                        display: 'flex', justifyContent: 'space-between',
+                      }}>
+                        <strong>{item.asset_code}</strong>
+                        <span>
+                          AI: <strong>{item.ai_quantity}</strong>
+                          {item.db_quantity !== undefined && <> · 系统: <strong>{item.db_quantity}</strong></>}
+                          {item.diff_pct !== undefined && <span style={{ color: '#d97706', marginLeft: 8 }}>差异 {item.diff_pct}%</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {validation.errors.length === 0 && validation.warnings.length === 0 && (
+                  <div style={{ fontSize: 13, color: '#16a34a' }}>
+                    ✅ 所有持仓数量与系统记录吻合，可安全确认写入
+                  </div>
+                )}
+
+                {validation.new_positions.length > 0 && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: colors.muted }}>
+                    新增持仓（系统无记录）：{validation.new_positions.map((p) => p.asset_code).join(', ')}
+                  </div>
+                )}
+              </div>
+            )}
 
             {positions.length > 0 && (
               <div style={{ ...styles.card, marginBottom: 16 }}>

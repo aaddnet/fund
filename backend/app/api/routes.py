@@ -61,6 +61,7 @@ from app.services.fee_service import calc_fee, list_fees
 from app.services.import_service import confirm_batch, get_batch, list_batches, reset_batch, serialize_batch, upload_csv
 from app.services.nav_engine import calc_nav, check_nav_rates, list_nav, rebuild_nav_batch
 from app.services.pdf_parser_service import confirm_pdf_batch, serialize_pdf_batch
+from app.services.pdf_validator_service import validate_parsed_result
 from app.services.price_service import fetch_and_save_prices, save_price_manual, save_prices_csv
 from app.services.scheduler import SCHEDULER_JOB_FX_WEEKLY, list_job_runs, run_weekly_fx_job
 from app.services.share_service import balances, history, redeem, subscribe
@@ -652,23 +653,30 @@ async def upload_pdf(
     db.commit()
     db.refresh(batch)
 
-    async def _parse(batch_id: int, content: bytes):
+    async def _parse(batch_id: int, content: bytes, acct_id: int):
         import logging as _logging
         _log = _logging.getLogger("pdf_parse_task")
         from app.db import SessionLocal as _SL
         from app.services.pdf_parser_service import parse_pdf_with_ai as _parse_ai
+        from app.services.pdf_validator_service import validate_parsed_result as _validate
         db2 = _SL()
         try:
             b = db2.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
             result = await _parse_ai(content)
-            b.parsed_data = _json.dumps(result, ensure_ascii=False)
-            b.ai_model = settings.ollama_model
             if result.get("parse_error"):
                 b.status = "failed"
                 b.failed_reason = (result.get("raw_text") or "JSON解析失败，模型输出不符合格式要求")[:500]
                 _log.error("PDF batch %s parse_error: %s", batch_id, b.failed_reason)
             else:
+                # AI-02: run confidence validation against existing DB positions
+                try:
+                    validation = _validate(result, acct_id, db2)
+                    result["_validation"] = validation
+                except Exception as ve:
+                    _log.warning("Validation step failed (non-fatal): %s", ve)
                 b.status = "parsed"
+            b.parsed_data = _json.dumps(result, ensure_ascii=False)
+            b.ai_model = settings.ollama_model
             db2.commit()
         except Exception as exc:
             _log.exception("PDF batch %s background task failed", batch_id)
@@ -681,7 +689,7 @@ async def upload_pdf(
         finally:
             db2.close()
 
-    background_tasks.add_task(_parse, batch.id, pdf_bytes)
+    background_tasks.add_task(_parse, batch.id, pdf_bytes, account_id)
     record_audit(db, actor, action="pdf_import.upload", entity_type="pdf_import_batch",
                  entity_id=str(batch.id), detail={"account_id": account_id, "filename": file.filename})
     return serialize_pdf_batch(batch)
