@@ -48,8 +48,8 @@ SKIP_KEYWORDS = [
     "风险提示", "免责声明", "声明",
 ]
 
-_DPI = 200           # 200 DPI for legible table text
-_BATCH_SIZE = 5      # pages per AI call for position extraction
+_DPI = 150           # 150 DPI balances legibility vs image size (~600KB/page)
+_BATCH_SIZE = 3      # pages per AI call; 3×150DPI ≈ 6MB base64, safe for local GPU
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +363,8 @@ async def ask_ai(
         len(images_b64), ollama_base, model, prompt_type,
     )
 
-    async with httpx.AsyncClient(timeout=600.0) as client:
+    _timeout = httpx.Timeout(connect=30.0, read=900.0, write=120.0, pool=30.0)
+    async with httpx.AsyncClient(timeout=_timeout) as client:
         resp = await client.post(f"{ollama_base}/api/chat", json=payload)
         resp.raise_for_status()
         raw = resp.json()["message"]["content"]
