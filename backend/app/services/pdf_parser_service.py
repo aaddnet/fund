@@ -85,39 +85,66 @@ async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
         text = text[:_MAX_TEXT_CHARS] + " ...[截断]"
 
     ollama_base = getattr(settings, "ollama_base_url", None) or "http://ollama:11434"
-    model = getattr(settings, "ollama_model", None) or "qwen2.5:72b-instruct-q4_K_M"
+    model = getattr(settings, "ollama_model", None) or "qwen3.5:latest"
+
+    # Use str.replace instead of .format() to avoid KeyError when PDF text contains { }
+    user_content = _USER_TEMPLATE.replace("{pdf_text}", text)
 
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": _USER_TEMPLATE.format(pdf_text=text)},
+            {"role": "user", "content": user_content},
         ],
         "stream": False,
         "options": {"temperature": 0.1},
+        # Disable chain-of-thought for thinking models (qwen3, deepseek-r1, etc.)
+        "think": False,
     }
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         resp = await client.post(f"{ollama_base}/api/chat", json=payload)
         resp.raise_for_status()
-        raw = resp.json()["message"]["content"].strip()
+        data = resp.json()
+        raw = data["message"]["content"].strip()
 
+    logger.info("Ollama raw response (first 200 chars): %s", raw[:200])
     return _parse_json_response(raw)
 
 
+def _strip_think_tags(raw: str) -> str:
+    """Remove <think>...</think> blocks produced by reasoning models."""
+    import re
+    # Non-greedy strip of all <think> blocks
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    return cleaned.strip()
+
+
 def _parse_json_response(raw: str) -> dict:
-    """Strip markdown fences and parse JSON."""
+    """Strip thinking tags + markdown fences, then parse JSON."""
+    # Step 1: remove <think> blocks (qwen3, deepseek-r1, etc.)
+    raw = _strip_think_tags(raw)
+
+    # Step 2: strip markdown code fences
     if raw.startswith("```"):
         lines = raw.split("\n")
-        # Drop first (```json) and last (```) fence lines
         inner = lines[1:] if lines[0].startswith("```") else lines
         if inner and inner[-1].strip() == "```":
             inner = inner[:-1]
-        raw = "\n".join(inner)
+        raw = "\n".join(inner).strip()
+
+    # Step 3: extract first JSON object/array if there's surrounding text
+    import re
+    if not raw.startswith(("{", "[")):
+        match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", raw)
+        if match:
+            raw = match.group(1)
+
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"parse_error": True, "raw_text": raw}
+    except json.JSONDecodeError as e:
+        logger.warning("JSON parse failed: %s | raw: %s", e, raw[:300])
+        return {"parse_error": True, "raw_text": raw[:1000]}
 
 
 # ---------------------------------------------------------------------------

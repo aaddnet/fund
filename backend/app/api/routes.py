@@ -653,22 +653,30 @@ async def upload_pdf(
     db.refresh(batch)
 
     async def _parse(batch_id: int, content: bytes):
+        import logging as _logging
+        _log = _logging.getLogger("pdf_parse_task")
         from app.db import SessionLocal as _SL
         from app.services.pdf_parser_service import parse_pdf_with_ai as _parse_ai
         db2 = _SL()
         try:
             b = db2.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
             result = await _parse_ai(content)
-            b.parsed_data = _json.dumps(result)
-            b.status = "failed" if result.get("parse_error") else "parsed"
+            b.parsed_data = _json.dumps(result, ensure_ascii=False)
+            b.ai_model = settings.ollama_model
             if result.get("parse_error"):
-                b.failed_reason = result.get("raw_text", "")[:500]
+                b.status = "failed"
+                b.failed_reason = (result.get("raw_text") or "JSON解析失败，模型输出不符合格式要求")[:500]
+                _log.error("PDF batch %s parse_error: %s", batch_id, b.failed_reason)
+            else:
+                b.status = "parsed"
             db2.commit()
         except Exception as exc:
+            _log.exception("PDF batch %s background task failed", batch_id)
+            db2.rollback()
             b = db2.query(PdfImportBatch).filter(PdfImportBatch.id == batch_id).first()
             if b:
                 b.status = "failed"
-                b.failed_reason = str(exc)[:500]
+                b.failed_reason = f"{type(exc).__name__}: {exc}"[:500]
                 db2.commit()
         finally:
             db2.close()
