@@ -24,17 +24,25 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "You are a financial statement data extraction API. "
-    "You MUST output ONLY a single valid JSON object with no explanation, no markdown, no prose. "
-    "Rules: amounts are plain numbers, dates are YYYY-MM-DD, quantities keep decimals."
+    "You are a JSON-only financial data extraction API. "
+    "Never write prose. Never explain. Output only the JSON continuation."
 )
 
+# /no_think suppresses qwen3 chain-of-thought; {pdf_text} is replaced via str.replace
 _USER_TEMPLATE = """\
 /no_think
-Extract data from the broker statement below. Output ONLY this JSON object, nothing else:
-{"account_info":{"account_no":"","broker":"","base_currency":"USD"},"statement_end_date":"YYYY-MM-DD","positions":[{"asset_code":"","asset_name":"","quantity":0.0,"average_cost":0.0,"currency":"USD","market_value":0.0,"asset_type":"stock"}],"cash_balances":[{"currency":"USD","balance":0.0}],"capital_events":[{"date":"","type":"deposit","amount":0.0,"currency":"USD","note":""}],"parsing_confidence":"high"}
+From the broker statement below, fill in and return ONLY the following JSON (no extra text):
 
-Statement text:
+{
+  "account_info": {"account_no": "", "broker": "", "base_currency": "USD"},
+  "statement_end_date": "YYYY-MM-DD",
+  "positions": [{"asset_code": "", "asset_name": "", "quantity": 0.0, "average_cost": 0.0, "currency": "USD", "market_value": 0.0, "asset_type": "stock"}],
+  "cash_balances": [{"currency": "USD", "balance": 0.0}],
+  "capital_events": [{"date": "", "type": "deposit", "amount": 0.0, "currency": "USD", "note": ""}],
+  "parsing_confidence": "high"
+}
+
+Statement:
 {pdf_text}
 """
 
@@ -83,9 +91,11 @@ async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
+            # Assistant priming: force the model to continue from '{' so it
+            # cannot output prose before the JSON object.
+            {"role": "assistant", "content": "{"},
         ],
         "stream": False,
-        "format": "json",          # Force JSON output mode (Ollama ≥0.1.9)
         "think": False,            # Suppress CoT for qwen3/deepseek-r1
         "options": {"temperature": 0.1},
     }
@@ -94,7 +104,8 @@ async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
         resp = await client.post(f"{ollama_base}/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()
-        raw = data["message"]["content"].strip()
+        # Prepend the priming character we sent as the assistant seed
+        raw = "{" + data["message"]["content"]
 
     logger.info("Ollama raw response (first 200 chars): %s", raw[:200])
     return _parse_json_response(raw)
