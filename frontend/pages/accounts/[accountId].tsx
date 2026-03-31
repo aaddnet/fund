@@ -34,15 +34,40 @@ export default function Page({ account, positions, transactions, imports, cashPo
   const [tab, setTab] = useState<Tab>('positions');
 
   const tabs: { key: Tab; label: string; count: number }[] = [
-    { key: 'positions', label: t('tabPositions'), count: positions.length },
+    { key: 'positions', label: t('tabPositions'), count: aggregatedPositions.length },
     { key: 'transactions', label: t('tabTransactions'), count: transactions.length },
     { key: 'imports', label: t('tabImports'), count: imports.length },
     { key: 'cash', label: t('tabCash'), count: cashPositions.length },
   ];
 
+  // Aggregate positions by (asset_code, currency):
+  // - quantity = sum of all snapshots
+  // - average_cost = weighted average (total_cost / total_qty)
+  // - snapshot_date = latest date among all snapshots
+  const aggregatedPositions = useMemo(() => {
+    const map = new Map<string, { asset_code: string; currency: string; total_qty: number; total_cost: number; snapshot_date: string }>();
+    for (const p of positions) {
+      const key = `${p.asset_code}__${p.currency}`;
+      const qty = Number(p.quantity);
+      const cost = Number(p.average_cost || 0);
+      const existing = map.get(key);
+      if (existing) {
+        existing.total_cost += qty * cost;
+        existing.total_qty += qty;
+        if (p.snapshot_date > existing.snapshot_date) existing.snapshot_date = p.snapshot_date;
+      } else {
+        map.set(key, { asset_code: p.asset_code, currency: p.currency, total_qty: qty, total_cost: qty * cost, snapshot_date: p.snapshot_date });
+      }
+    }
+    return Array.from(map.values())
+      .filter(r => r.total_qty !== 0)
+      .map(r => ({ asset_code: r.asset_code, currency: r.currency, quantity: r.total_qty, average_cost: r.total_qty !== 0 ? r.total_cost / r.total_qty : 0, snapshot_date: r.snapshot_date }))
+      .sort((a, b) => a.asset_code.localeCompare(b.asset_code));
+  }, [positions]);
+
   const totalPositionValue = useMemo(
-    () => positions.reduce((sum, p) => sum + Number(p.quantity) * Number(p.average_cost || 0), 0),
-    [positions],
+    () => aggregatedPositions.reduce((sum, p) => sum + p.quantity * p.average_cost, 0),
+    [aggregatedPositions],
   );
 
   const totalCash = useMemo(
@@ -74,7 +99,7 @@ export default function Page({ account, positions, transactions, imports, cashPo
           <div style={{ display: 'flex', gap: 20, fontSize: 13 }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ color: colors.muted }}>{t('tabPositions')}</div>
-              <div style={{ fontWeight: 700, fontSize: 18 }}>{positions.length}</div>
+              <div style={{ fontWeight: 700, fontSize: 18 }}>{aggregatedPositions.length}</div>
             </div>
             <div style={{ textAlign: 'center' }}>
               <div style={{ color: colors.muted }}>{t('tabTransactions')}</div>
@@ -118,15 +143,18 @@ export default function Page({ account, positions, transactions, imports, cashPo
       {/* Positions tab */}
       {tab === 'positions' && (
         <div style={styles.card}>
+          <div style={{ fontSize: 12, color: colors.muted, marginBottom: 8 }}>
+            同一资产已按代码汇总 · 数量为各快照总和 · 均价为加权平均 · 快照日期为最新记录日期
+          </div>
           <ProductTable
             emptyText={t('noPositions')}
-            rows={positions}
+            rows={aggregatedPositions}
             columns={[
               { key: 'asset', title: t('assetCode'), render: r => <strong>{r.asset_code}</strong> },
               { key: 'qty', title: t('quantity'), render: r => fmt(r.quantity, 4) },
               { key: 'avg', title: t('avgCost'), render: r => fmt(r.average_cost, 4) },
               { key: 'cur', title: 'Currency', render: r => r.currency },
-              { key: 'val', title: 'Value', render: r => `$${fmt(Number(r.quantity) * Number(r.average_cost || 0))}` },
+              { key: 'val', title: 'Value (Cost)', render: r => `$${fmt(r.quantity * r.average_cost)}` },
               { key: 'snap', title: t('snapshotDate'), render: r => r.snapshot_date },
             ]}
           />
