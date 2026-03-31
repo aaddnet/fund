@@ -32,6 +32,8 @@ services:
       # IMPORTANT: override AUTH_SECRET_KEY with a strong random value in production.
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-change-me-invest-dev-secret}
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:latest}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
