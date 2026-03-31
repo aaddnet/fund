@@ -362,23 +362,22 @@ async def ask_ai(
                 "images": images_b64,
             },
         ],
-        "stream": True,   # streaming: each token resets the read-timeout clock
-        "think": False,   # suppress qwen3 reasoning chain
+        "stream": True,   # streaming: each token resets the per-chunk read timeout
+        "think": False,   # suppress qwen3 reasoning chain (Ollama 0.6+)
         "options": {"temperature": 0.1, "num_ctx": 8192, "num_predict": 2048},
+        # Note: JSON Schema "format" intentionally omitted — it conflicts with
+        # streaming + think mode in qwen3-vl, causing empty content output.
     }
-
-    # AI-05: attach JSON Schema if supported (Ollama >= 0.5 for object format)
-    if schema is not None:
-        payload["format"] = schema
 
     logger.info(
         "Sending %d image(s) to %s / %s [type=%s]",
         len(images_b64), ollama_base, model, prompt_type,
     )
 
-    # Use per-chunk timeout: model only needs to produce a token every 120s
+    # per-chunk timeout: model must emit a token within 120s
     _timeout = httpx.Timeout(connect=30.0, read=120.0, write=120.0, pool=30.0)
-    raw_parts: list[str] = []
+    content_parts: list[str] = []
+    thinking_parts: list[str] = []
 
     async with httpx.AsyncClient(timeout=_timeout) as client:
         async with client.stream("POST", f"{ollama_base}/api/chat", json=payload) as resp:
@@ -390,13 +389,21 @@ async def ask_ai(
                     chunk = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                delta = chunk.get("message", {}).get("content", "")
-                if delta:
-                    raw_parts.append(delta)
+                msg = chunk.get("message", {})
+                # collect both channels — qwen3 may route output differently per mode
+                if msg.get("content"):
+                    content_parts.append(msg["content"])
+                if msg.get("thinking"):
+                    thinking_parts.append(msg["thinking"])
                 if chunk.get("done"):
                     break
 
-    raw = "".join(raw_parts)
+    # prefer content channel; fall back to thinking channel if content is empty
+    raw = "".join(content_parts).strip()
+    if not raw:
+        raw = "".join(thinking_parts).strip()
+        if raw:
+            logger.warning("content channel empty — using thinking channel (%d chars)", len(raw))
 
     logger.info("Vision model raw (first 400): %s", raw[:400])
     return _parse_json_response(raw)
