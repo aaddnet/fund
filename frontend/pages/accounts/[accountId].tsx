@@ -459,7 +459,7 @@ export async function getServerSideProps(context: any) {
     const [account, posData, txData, importData, cashData, priceData, cashBalData, fxData] = await Promise.all([
       getAccount(accountId, auth.accessToken),
       getPositions({ accountId, size: 200, accessToken: auth.accessToken }),
-      getTransactions({ accountId, size: 500, accessToken: auth.accessToken }),
+      getTransactions({ accountId, size: 200, accessToken: auth.accessToken }),
       getImportBatches({ accountId, accessToken: auth.accessToken }),
       getCashPositions({ accountId, accessToken: auth.accessToken }),
       getPrices({ size: 200, accessToken: auth.accessToken }),
