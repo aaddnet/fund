@@ -30,6 +30,8 @@ _IB_ACTIVITY_COL_MAP = {
     "t. price": "price",
     "comm/fee": "fee",
     "currency": "currency",
+    "asset category": "asset_category",   # enables forex/cash detection in _emit_rows
+    "asset class": "asset_category",      # alternative column name in some exports
 }
 
 # Activity Statement ZH: Chinese column name → standard column name
@@ -98,7 +100,8 @@ _IB_FLEX_COL_MAP = {
 }
 
 # Section names that contain transaction data (EN + ZH)
-_TRADE_SECTIONS = {"trades", "transaction history", "交易"}
+# "Transactions" is used in IB's 1Y/Transactions Statement export format
+_TRADE_SECTIONS = {"trades", "transactions", "transaction history", "交易"}
 
 
 def preprocess(raw: bytes) -> bytes:
