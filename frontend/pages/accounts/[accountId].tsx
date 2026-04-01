@@ -42,25 +42,24 @@ export default function Page({ account, positions, transactions, imports, cashPo
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('positions');
 
-  // Aggregate positions by (asset_code, currency)
+  // Use the latest snapshot per (asset_code, currency)
   const aggregatedPositions = useMemo(() => {
-    const map = new Map<string, { asset_code: string; currency: string; total_qty: number; total_cost: number; snapshot_date: string }>();
+    const map = new Map<string, { asset_code: string; currency: string; quantity: number; average_cost: number; snapshot_date: string }>();
     for (const p of positions) {
       const key = `${p.asset_code}__${p.currency}`;
-      const qty = Number(p.quantity);
-      const cost = Number(p.average_cost || 0);
       const existing = map.get(key);
-      if (existing) {
-        existing.total_cost += qty * cost;
-        existing.total_qty += qty;
-        if (p.snapshot_date > existing.snapshot_date) existing.snapshot_date = p.snapshot_date;
-      } else {
-        map.set(key, { asset_code: p.asset_code, currency: p.currency, total_qty: qty, total_cost: qty * cost, snapshot_date: p.snapshot_date });
+      if (!existing || p.snapshot_date > existing.snapshot_date) {
+        map.set(key, {
+          asset_code: p.asset_code,
+          currency: p.currency,
+          quantity: Number(p.quantity),
+          average_cost: Number(p.average_cost || 0),
+          snapshot_date: p.snapshot_date,
+        });
       }
     }
     return Array.from(map.values())
-      .filter(r => r.total_qty !== 0)
-      .map(r => ({ asset_code: r.asset_code, currency: r.currency, quantity: r.total_qty, average_cost: r.total_qty !== 0 ? r.total_cost / r.total_qty : 0, snapshot_date: r.snapshot_date }))
+      .filter(r => r.quantity !== 0)
       .sort((a, b) => a.asset_code.localeCompare(b.asset_code));
   }, [positions]);
 
@@ -210,7 +209,7 @@ export default function Page({ account, positions, transactions, imports, cashPo
       {tab === 'positions' && (
         <div style={styles.card}>
           <div style={{ fontSize: 12, color: colors.muted, marginBottom: 8 }}>
-            同一资产已按代码汇总 · 数量为各快照总和 · 均价为加权平均 · 快照日期为最新记录日期
+            每个资产取最新快照日期的持仓数量和均价
           </div>
           <ProductTable
             emptyText={t('noPositions')}
