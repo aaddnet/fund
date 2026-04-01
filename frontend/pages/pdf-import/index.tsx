@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import Layout from '../../components/Layout';
-import ProductTable from '../../components/ProductTable';
 import { useToast } from '../../components/Toast';
 import {
   Account,
   PdfImportBatchRecord,
-  ValidationItem,
   ValidationResult,
   getAccounts,
   uploadPdfBatch,
@@ -18,11 +15,7 @@ import {
 import { requirePageAuth } from '../../lib/pageAuth';
 import { colors, styles } from '../../lib/ui';
 
-type Props = {
-  accounts: Account[];
-  batches: PdfImportBatchRecord[];
-  error?: string;
-};
+type Props = { accounts: Account[]; batches: PdfImportBatchRecord[]; error?: string };
 
 export default function Page({ accounts, batches: initialBatches, error }: Props) {
   const { showToast } = useToast();
@@ -36,7 +29,29 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
   const [confirming, setConfirming] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Poll a "parsing" batch until it's done
+  // per-position editable state: asset_code → { selected, average_cost }
+  const [posEdits, setPosEdits] = useState<Record<string, { selected: boolean; average_cost: string }>>({});
+
+  const parsed = activeBatch?.parsed_data ?? {};
+  const positions: any[] = parsed.positions ?? [];
+  const cashBalances: any[] = parsed.cash_balances ?? [];
+  const capitalEvents: any[] = parsed.capital_events ?? [];
+  const trades: any[] = parsed.trades ?? [];
+  const confidence: string = parsed.parsing_confidence ?? '';
+  const validation: ValidationResult | null | undefined = activeBatch?.validation ?? parsed._validation ?? null;
+
+  // initialise edits whenever active batch changes
+  useEffect(() => {
+    if (!activeBatch) return;
+    const init: Record<string, { selected: boolean; average_cost: string }> = {};
+    (activeBatch.parsed_data?.positions ?? []).forEach((p: any) => {
+      const key = p.asset_code;
+      init[key] = { selected: true, average_cost: String(p.average_cost ?? '') };
+    });
+    setPosEdits(init);
+  }, [activeBatch?.id]);
+
+  // Poll parsing batch
   useEffect(() => {
     if (activeBatch?.status === 'parsing') {
       pollRef.current = setInterval(async () => {
@@ -44,12 +59,8 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
           const updated = await getPdfBatch(activeBatch.id);
           setActiveBatch(updated);
           setBatches((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
-          if (updated.status !== 'parsing') {
-            if (pollRef.current) clearInterval(pollRef.current);
-          }
-        } catch {
-          if (pollRef.current) clearInterval(pollRef.current);
-        }
+          if (updated.status !== 'parsing' && pollRef.current) clearInterval(pollRef.current);
+        } catch { if (pollRef.current) clearInterval(pollRef.current); }
       }, 3000);
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -65,27 +76,34 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
       setBatches((prev) => [batch, ...prev]);
       setActiveBatch(batch);
       showToast('已上传，AI 解析中…', 'success');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : '上传失败', 'error');
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
+    } catch (err) { showToast(err instanceof Error ? err.message : '上传失败', 'error'); }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ''; }
   }
 
   async function handleConfirm() {
     if (!activeBatch) return;
+    const selectedPositions = positions
+      .filter((p) => posEdits[p.asset_code]?.selected !== false)
+      .map((p) => ({
+        ...p,
+        average_cost: posEdits[p.asset_code]?.average_cost !== ''
+          ? Number(posEdits[p.asset_code]?.average_cost) || p.average_cost
+          : p.average_cost,
+      }));
+
+    const confirmedData = {
+      ...(activeBatch.parsed_data ?? {}),
+      positions: selectedPositions,
+    };
+
     setConfirming(true);
     try {
-      const updated = await confirmPdfBatch(activeBatch.id, activeBatch.confirmed_data ?? activeBatch.parsed_data);
+      const updated = await confirmPdfBatch(activeBatch.id, confirmedData);
       setActiveBatch(updated);
       setBatches((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
-      showToast('持仓已写入数据库', 'success');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : '确认失败', 'error');
-    } finally {
-      setConfirming(false);
-    }
+      showToast(`${selectedPositions.length} 项持仓已写入数据库`, 'success');
+    } catch (err) { showToast(err instanceof Error ? err.message : '确认失败', 'error'); }
+    finally { setConfirming(false); }
   }
 
   async function handleReset(batchId: number) {
@@ -94,39 +112,42 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
       setBatches((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
       if (activeBatch?.id === batchId) setActiveBatch(updated);
       showToast('已重置', 'success');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : '重置失败', 'error');
-    }
+    } catch (err) { showToast(err instanceof Error ? err.message : '重置失败', 'error'); }
   }
 
-  const parsed = activeBatch?.parsed_data ?? {};
-  const positions: any[] = parsed.positions ?? [];
-  const cashBalances: any[] = parsed.cash_balances ?? [];
-  const capitalEvents: any[] = parsed.capital_events ?? [];
-  const confidence: string = parsed.parsing_confidence ?? '';
-  const validation: ValidationResult | null | undefined = activeBatch?.validation ?? parsed._validation ?? null;
-  const hasErrors = (validation?.errors?.length ?? 0) > 0;
+  function toggleAll(val: boolean) {
+    setPosEdits((prev) => {
+      const next = { ...prev };
+      positions.forEach((p) => { if (next[p.asset_code]) next[p.asset_code] = { ...next[p.asset_code], selected: val }; });
+      return next;
+    });
+  }
+
+  const selectedCount = positions.filter((p) => posEdits[p.asset_code]?.selected !== false).length;
+
+  // Validation level per asset_code
+  const validationMap: Record<string, 'error' | 'warning'> = {};
+  (validation?.errors ?? []).forEach((e) => { validationMap[e.asset_code] = 'error'; });
+  (validation?.warnings ?? []).forEach((w) => { if (!validationMap[w.asset_code]) validationMap[w.asset_code] = 'warning'; });
 
   return (
     <Layout title='PDF 年度账单导入' subtitle='上传券商年度 PDF 账单，AI 解析后人工确认写入' requiredPermission='import.write'>
       {error && <div style={{ ...styles.card, color: colors.danger, marginBottom: 16 }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        {/* Upload Panel */}
-        <div style={{ ...styles.card, flex: '0 0 340px' }}>
+        {/* ── Upload + history panel ── */}
+        <div style={{ ...styles.card, flex: '0 0 300px' }}>
           <h3 style={{ marginTop: 0 }}>上传年度账单</h3>
           <form onSubmit={handleUpload} style={{ display: 'grid', gap: 12 }}>
             <div>
               <div style={{ fontSize: 12, color: colors.muted, marginBottom: 4 }}>账户</div>
               <select style={styles.input} value={accountId} onChange={(e) => setAccountId(e.target.value)} required>
                 <option value=''>请选择账户…</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.broker} · {a.account_no}</option>
-                ))}
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.broker} · {a.account_no}</option>)}
               </select>
             </div>
             <div>
-              <div style={{ fontSize: 12, color: colors.muted, marginBottom: 4 }}>年末快照日期（如 2023-12-31）</div>
+              <div style={{ fontSize: 12, color: colors.muted, marginBottom: 4 }}>年末快照日期</div>
               <input type='date' style={styles.input} value={snapshotDate} onChange={(e) => setSnapshotDate(e.target.value)} required />
             </div>
             <div>
@@ -141,15 +162,11 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
           <div style={{ marginTop: 20 }}>
             <h4 style={{ marginBottom: 8 }}>历史批次</h4>
             {batches.map((b) => (
-              <div
-                key={b.id}
-                onClick={() => setActiveBatch(b)}
-                style={{
-                  padding: '8px 12px', marginBottom: 6, borderRadius: 6, cursor: 'pointer',
-                  background: activeBatch?.id === b.id ? '#eff6ff' : '#f8fafc',
-                  border: `1px solid ${activeBatch?.id === b.id ? colors.primary : colors.border}`,
-                }}
-              >
+              <div key={b.id} onClick={() => setActiveBatch(b)} style={{
+                padding: '8px 12px', marginBottom: 6, borderRadius: 6, cursor: 'pointer',
+                background: activeBatch?.id === b.id ? '#eff6ff' : '#f8fafc',
+                border: `1px solid ${activeBatch?.id === b.id ? colors.primary : colors.border}`,
+              }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <strong style={{ fontSize: 13 }}>{b.snapshot_date}</strong>
                   <span style={{
@@ -164,30 +181,24 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
           </div>
         </div>
 
-        {/* Preview Panel */}
+        {/* ── Preview panel ── */}
         {activeBatch && (
           <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Header */}
             <div style={{ ...styles.card, marginBottom: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                 <h3 style={{ margin: 0 }}>
                   解析结果 — {activeBatch.snapshot_date}
                   {activeBatch.ai_model && <span style={{ fontSize: 12, color: colors.muted, marginLeft: 8 }}>({activeBatch.ai_model})</span>}
                 </h3>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  {activeBatch.status === 'parsed' && (
-                    <button
-                      style={{ ...styles.buttonPrimary, ...(hasErrors ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-                      onClick={handleConfirm}
-                      disabled={confirming || hasErrors}
-                      title={hasErrors ? '存在差异超过 20% 的持仓，请人工核查后再确认' : undefined}
-                    >
-                      {confirming ? '写入中…' : '确认写入数据库'}
+                  {activeBatch.status === 'parsed' && positions.length > 0 && (
+                    <button style={styles.buttonPrimary} onClick={handleConfirm} disabled={confirming || selectedCount === 0}>
+                      {confirming ? '写入中…' : `确认写入 ${selectedCount} 项持仓`}
                     </button>
                   )}
                   {['parsed', 'confirmed', 'failed', 'confirmed_pending_deposits'].includes(activeBatch.status) && (
-                    <button style={{ ...styles.buttonSecondary, color: colors.danger }} onClick={() => handleReset(activeBatch.id)}>
-                      重置
-                    </button>
+                    <button style={{ ...styles.buttonSecondary, color: colors.danger }} onClick={() => handleReset(activeBatch.id)}>重置</button>
                   )}
                 </div>
               </div>
@@ -195,141 +206,208 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
               {activeBatch.status === 'parsing' && (
                 <div style={{ padding: '20px', textAlign: 'center', color: colors.muted }}>
                   <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
-                  AI 解析中，请稍候（约 60-90 秒）…
+                  AI 解析中，请稍候…
                 </div>
               )}
-
               {activeBatch.status === 'failed' && (
-                <div style={{ color: colors.danger, fontSize: 13 }}>
+                <div style={{ color: colors.danger, fontSize: 13, marginTop: 8 }}>
                   <strong>解析失败：</strong>{activeBatch.failed_reason}
                 </div>
               )}
-
               {confidence && confidence !== 'high' && activeBatch.status === 'parsed' && (
-                <div style={{ background: '#fff7ed', border: '1px solid #fb923c', borderRadius: 6, padding: '8px 12px', marginBottom: 12, fontSize: 13 }}>
-                  ⚠️ 解析置信度: <strong>{confidence}</strong>，请仔细核对以下数据再确认写入
+                <div style={{ background: '#fff7ed', border: '1px solid #fb923c', borderRadius: 6, padding: '8px 12px', marginTop: 10, fontSize: 13 }}>
+                  ⚠️ 解析置信度: <strong>{confidence}</strong>，请仔细核对后再确认写入
                 </div>
               )}
             </div>
 
-            {/* AI-02: Validation diff panel */}
-            {validation && activeBatch.status === 'parsed' && (
-              <div style={{ ...styles.card, marginBottom: 16 }}>
-                <h4 style={{ marginTop: 0, marginBottom: 12 }}>
-                  置信度校验
-                  {validation.summary && (
-                    <span style={{ fontSize: 12, color: colors.muted, fontWeight: 400, marginLeft: 8 }}>
-                      共 {validation.summary.total} 项持仓
-                      {validation.summary.matched > 0 && ` · ${validation.summary.matched} 项匹配`}
-                      {validation.summary.new > 0 && ` · ${validation.summary.new} 项新增`}
-                    </span>
-                  )}
-                </h4>
-
+            {/* Validation summary */}
+            {validation && activeBatch.status === 'parsed' && (validation.errors.length > 0 || validation.warnings.length > 0) && (
+              <div style={{ ...styles.card, marginBottom: 16, fontSize: 13 }}>
+                <strong>置信度校验</strong>
                 {validation.errors.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#dc2626', marginBottom: 6 }}>
-                      🔴 差异超过 20%，需人工确认（{validation.errors.length} 项）
-                    </div>
-                    {validation.errors.map((item) => (
-                      <div key={item.asset_code} style={{
-                        background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6,
-                        padding: '6px 12px', marginBottom: 4, fontSize: 13,
-                        display: 'flex', justifyContent: 'space-between',
-                      }}>
-                        <strong>{item.asset_code}</strong>
-                        <span>
-                          AI: <strong>{item.ai_quantity}</strong>
-                          {item.db_quantity !== undefined && <> · 系统: <strong>{item.db_quantity}</strong></>}
-                          {item.diff_pct !== undefined && <span style={{ color: '#dc2626', marginLeft: 8 }}>差异 {item.diff_pct}%</span>}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                  <span style={{ marginLeft: 12, color: '#dc2626' }}>🔴 {validation.errors.length} 项差异 &gt;20%</span>
                 )}
-
                 {validation.warnings.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#d97706', marginBottom: 6 }}>
-                      ⚠️ 差异 5-20%，建议核查（{validation.warnings.length} 项）
-                    </div>
-                    {validation.warnings.map((item) => (
-                      <div key={item.asset_code} style={{
-                        background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 6,
-                        padding: '6px 12px', marginBottom: 4, fontSize: 13,
-                        display: 'flex', justifyContent: 'space-between',
-                      }}>
-                        <strong>{item.asset_code}</strong>
-                        <span>
-                          AI: <strong>{item.ai_quantity}</strong>
-                          {item.db_quantity !== undefined && <> · 系统: <strong>{item.db_quantity}</strong></>}
-                          {item.diff_pct !== undefined && <span style={{ color: '#d97706', marginLeft: 8 }}>差异 {item.diff_pct}%</span>}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                  <span style={{ marginLeft: 12, color: '#d97706' }}>⚠️ {validation.warnings.length} 项差异 5-20%</span>
                 )}
-
-                {validation.errors.length === 0 && validation.warnings.length === 0 && (
-                  <div style={{ fontSize: 13, color: '#16a34a' }}>
-                    ✅ 所有持仓数量与系统记录吻合，可安全确认写入
-                  </div>
-                )}
-
-                {validation.new_positions.length > 0 && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: colors.muted }}>
-                    新增持仓（系统无记录）：{validation.new_positions.map((p) => p.asset_code).join(', ')}
-                  </div>
-                )}
+                <span style={{ marginLeft: 12, color: colors.muted }}>— 可勾选跳过问题项，单独确认其余持仓</span>
               </div>
             )}
 
-            {positions.length > 0 && (
+            {/* Positions table with checkboxes + inline avg cost edit */}
+            {positions.length > 0 && activeBatch.status === 'parsed' && (
+              <div style={{ ...styles.card, marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <h4 style={{ margin: 0 }}>持仓 ({positions.length} 项，已选 {selectedCount} 项)</h4>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button style={{ ...styles.buttonSecondary, fontSize: 12, padding: '3px 10px' }} onClick={() => toggleAll(true)}>全选</button>
+                    <button style={{ ...styles.buttonSecondary, fontSize: 12, padding: '3px 10px' }} onClick={() => toggleAll(false)}>全不选</button>
+                  </div>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc', borderBottom: `1px solid ${colors.border}` }}>
+                        <th style={{ padding: '6px 8px', textAlign: 'left', width: 32 }}></th>
+                        <th style={{ padding: '6px 8px', textAlign: 'left' }}>代码</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'left' }}>名称</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>数量</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>均价（可编辑）</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>市值</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'left' }}>币种</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'left' }}>类型</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'left' }}>校验</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positions.map((p) => {
+                        const key = p.asset_code;
+                        const edit = posEdits[key] ?? { selected: true, average_cost: String(p.average_cost ?? '') };
+                        const vLevel = validationMap[key];
+                        const rowBg = !edit.selected ? '#f8fafc' : vLevel === 'error' ? '#fff8f8' : vLevel === 'warning' ? '#fffdf0' : 'white';
+                        return (
+                          <tr key={key} style={{ borderBottom: `1px solid ${colors.border}`, background: rowBg, opacity: edit.selected ? 1 : 0.45 }}>
+                            <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                              <input type='checkbox' checked={edit.selected}
+                                onChange={(e) => setPosEdits((prev) => ({ ...prev, [key]: { ...prev[key], selected: e.target.checked } }))} />
+                            </td>
+                            <td style={{ padding: '6px 8px' }}><strong>{p.asset_code}</strong></td>
+                            <td style={{ padding: '6px 8px', color: colors.muted }}>{p.asset_name || '—'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{p.quantity}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                              <input
+                                type='number'
+                                step='any'
+                                value={edit.average_cost}
+                                onChange={(e) => setPosEdits((prev) => ({ ...prev, [key]: { ...prev[key], average_cost: e.target.value } }))}
+                                style={{
+                                  width: 90, textAlign: 'right', border: `1px solid ${colors.border}`,
+                                  borderRadius: 4, padding: '2px 4px', fontSize: 13,
+                                  background: edit.average_cost !== String(p.average_cost ?? '') ? '#fffbeb' : 'white',
+                                }}
+                              />
+                              {p.average_cost_from_trades && (
+                                <div style={{ fontSize: 11, color: '#2563eb', marginTop: 2, cursor: 'pointer' }}
+                                  title='点击使用交易记录计算的均价'
+                                  onClick={() => setPosEdits((prev) => ({ ...prev, [key]: { ...prev[key], average_cost: String(p.average_cost_from_trades) } }))}>
+                                  📊 交易均价: {p.average_cost_from_trades}
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{p.market_value ?? '—'}</td>
+                            <td style={{ padding: '6px 8px' }}>{p.currency}</td>
+                            <td style={{ padding: '6px 8px', color: colors.muted }}>{p.asset_type || '—'}</td>
+                            <td style={{ padding: '6px 8px' }}>
+                              {vLevel === 'error' && <span style={{ color: '#dc2626', fontWeight: 600 }}>🔴 差异大</span>}
+                              {vLevel === 'warning' && <span style={{ color: '#d97706' }}>⚠️ 差异</span>}
+                              {!vLevel && <span style={{ color: '#16a34a' }}>✅</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Positions view-only (confirmed) */}
+            {positions.length > 0 && activeBatch.status !== 'parsed' && (
               <div style={{ ...styles.card, marginBottom: 16 }}>
                 <h4 style={{ marginTop: 0 }}>持仓 ({positions.length})</h4>
-                <ProductTable
-                  emptyText='无持仓数据'
-                  rows={positions}
-                  columns={[
-                    { key: 'code', title: '代码', render: (r) => <strong>{r.asset_code}</strong> },
-                    { key: 'name', title: '名称', render: (r) => r.asset_name || '—' },
-                    { key: 'qty', title: '数量', render: (r) => r.quantity },
-                    { key: 'cost', title: '均价', render: (r) => r.average_cost ?? '—' },
-                    { key: 'mktval', title: '市值', render: (r) => r.market_value ?? '—' },
-                    { key: 'cur', title: '币种', render: (r) => r.currency },
-                    { key: 'type', title: '类型', render: (r) => r.asset_type || '—' },
-                  ]}
-                />
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc', borderBottom: `1px solid ${colors.border}` }}>
+                        {['代码','名称','数量','均价','市值','币种','类型'].map((h) => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: 'left' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positions.map((p) => (
+                        <tr key={p.asset_code} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                          <td style={{ padding: '6px 8px' }}><strong>{p.asset_code}</strong></td>
+                          <td style={{ padding: '6px 8px', color: colors.muted }}>{p.asset_name || '—'}</td>
+                          <td style={{ padding: '6px 8px' }}>{p.quantity}</td>
+                          <td style={{ padding: '6px 8px' }}>{p.average_cost ?? '—'}</td>
+                          <td style={{ padding: '6px 8px' }}>{p.market_value ?? '—'}</td>
+                          <td style={{ padding: '6px 8px' }}>{p.currency}</td>
+                          <td style={{ padding: '6px 8px', color: colors.muted }}>{p.asset_type || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
+            {/* Cash balances */}
             {cashBalances.length > 0 && (
               <div style={{ ...styles.card, marginBottom: 16 }}>
                 <h4 style={{ marginTop: 0 }}>现金余额</h4>
-                <ProductTable
-                  emptyText='无现金数据'
-                  rows={cashBalances}
-                  columns={[
-                    { key: 'cur', title: '币种', render: (r) => r.currency },
-                    { key: 'bal', title: '余额', render: (r) => r.balance },
-                  ]}
-                />
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead><tr style={{ background: '#f8fafc' }}>
+                    <th style={{ padding: '6px 8px', textAlign: 'left' }}>币种</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>余额</th>
+                  </tr></thead>
+                  <tbody>{cashBalances.map((c, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                      <td style={{ padding: '6px 8px' }}>{c.currency}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.balance}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
               </div>
             )}
 
+            {/* Trades */}
+            {trades.length > 0 && (
+              <div style={{ ...styles.card, marginBottom: 16 }}>
+                <h4 style={{ marginTop: 0 }}>交易记录 ({trades.length} 笔)</h4>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead><tr style={{ background: '#f8fafc', borderBottom: `1px solid ${colors.border}` }}>
+                      {['日期','代码','方向','数量','价格','币种','手续费'].map((h) => (
+                        <th key={h} style={{ padding: '5px 8px', textAlign: 'left' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>{trades.map((t, i) => (
+                      <tr key={i} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                        <td style={{ padding: '5px 8px' }}>{t.date || '—'}</td>
+                        <td style={{ padding: '5px 8px' }}><strong>{t.asset_code}</strong></td>
+                        <td style={{ padding: '5px 8px', color: t.side === 'buy' ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
+                          {t.side === 'buy' ? '买入' : t.side === 'sell' ? '卖出' : t.side || '—'}
+                        </td>
+                        <td style={{ padding: '5px 8px' }}>{t.quantity}</td>
+                        <td style={{ padding: '5px 8px' }}>{t.price}</td>
+                        <td style={{ padding: '5px 8px' }}>{t.currency || '—'}</td>
+                        <td style={{ padding: '5px 8px', color: colors.muted }}>{t.commission ?? '—'}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Capital events */}
             {capitalEvents.length > 0 && (
               <div style={styles.card}>
-                <h4 style={{ marginTop: 0 }}>资本事件（需手动确认）</h4>
-                <ProductTable
-                  emptyText='无资本事件'
-                  rows={capitalEvents}
-                  columns={[
-                    { key: 'date', title: '日期', render: (r) => r.date },
-                    { key: 'type', title: '类型', render: (r) => r.type },
-                    { key: 'amt', title: '金额', render: (r) => `${r.amount} ${r.currency}` },
-                    { key: 'note', title: '备注', render: (r) => r.note || '—' },
-                  ]}
-                />
+                <h4 style={{ marginTop: 0 }}>资本事件</h4>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead><tr style={{ background: '#f8fafc' }}>
+                    {['日期','类型','金额','备注'].map((h) => <th key={h} style={{ padding: '6px 8px', textAlign: 'left' }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>{capitalEvents.map((e, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                      <td style={{ padding: '6px 8px' }}>{e.date}</td>
+                      <td style={{ padding: '6px 8px' }}>{e.type}</td>
+                      <td style={{ padding: '6px 8px' }}>{e.amount} {e.currency}</td>
+                      <td style={{ padding: '6px 8px', color: colors.muted }}>{e.note || '—'}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
               </div>
             )}
           </div>
@@ -342,13 +420,11 @@ export default function Page({ accounts, batches: initialBatches, error }: Props
 export async function getServerSideProps(context: any) {
   const auth = await requirePageAuth(context);
   if ('redirect' in auth) return auth;
-
   try {
     const [accountsResult, batchesResult] = await Promise.allSettled([
       getAccounts({ size: 200, accessToken: auth.accessToken }),
       listPdfBatches({ accessToken: auth.accessToken }),
     ]);
-
     return {
       props: {
         initialUser: auth.initialUser,
@@ -359,13 +435,7 @@ export async function getServerSideProps(context: any) {
     };
   } catch (error: any) {
     return {
-      props: {
-        initialUser: auth.initialUser,
-        initialLocale: auth.initialLocale,
-        accounts: [],
-        batches: [],
-        error: error?.message || 'Failed to load.',
-      },
+      props: { initialUser: auth.initialUser, initialLocale: auth.initialLocale, accounts: [], batches: [], error: error?.message || 'Failed to load.' },
     };
   }
 }

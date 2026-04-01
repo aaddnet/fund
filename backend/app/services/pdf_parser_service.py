@@ -475,8 +475,21 @@ async def parse_pdf_smart(pdf_bytes: bytes) -> dict:
         r = await ask_ai(imgs, prompt_type="trades")
         result["trades"].extend(r.get("trades", []))
 
-    # 5. Merge duplicate positions
+    # 5. Merge duplicate positions (same asset across pages)
     result["positions"] = _merge_positions(result["positions"])
+
+    # 6. Enrich positions with trade-record average cost
+    #    OCR of printed avg cost is error-prone; WAVG from parsed trades is more reliable.
+    if result["trades"]:
+        trade_costs = _calc_avg_cost_from_trades(result["trades"])
+        for pos in result["positions"]:
+            code = str(pos.get("asset_code") or "").upper()
+            if code in trade_costs:
+                pos["average_cost_from_trades"] = round(trade_costs[code], 4)
+                # Override OCR avg cost only when OCR value is missing or zero
+                if not pos.get("average_cost"):
+                    pos["average_cost"] = pos["average_cost_from_trades"]
+                    logger.info("avg_cost for %s set from trades: %.4f", code, pos["average_cost"])
 
     if not result["positions"] and not result["cash_balances"]:
         result["parsing_confidence"] = "low"
@@ -495,6 +508,52 @@ async def parse_pdf_with_ai(pdf_bytes: bytes) -> dict:
 # ---------------------------------------------------------------------------
 # Position merging (AI-01: same asset_code across pages → weighted avg cost)
 # ---------------------------------------------------------------------------
+
+def _calc_avg_cost_from_trades(trades: list[dict]) -> dict[str, float]:
+    """
+    Calculate weighted average cost per asset from parsed trade records.
+    Uses a running WAVG model: buys increase position, sells reduce qty but keep cost.
+    Returns {asset_code: avg_cost}.
+    """
+    # Sort by date so buys/sells are processed chronologically
+    sorted_trades = sorted(trades, key=lambda t: str(t.get("date") or ""))
+    holdings: dict[str, list[float]] = {}  # code -> [total_qty, total_cost_value]
+
+    for t in sorted_trades:
+        code = str(t.get("asset_code") or "").strip().upper()
+        if not code:
+            continue
+        side = str(t.get("side") or "").lower()
+        try:
+            qty = float(t.get("quantity") or 0)
+            price = float(t.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0 or price <= 0:
+            continue
+
+        if code not in holdings:
+            holdings[code] = [0.0, 0.0]
+
+        curr_qty, curr_cost_total = holdings[code]
+
+        if side == "buy":
+            new_qty = curr_qty + qty
+            holdings[code] = [new_qty, curr_cost_total + qty * price]
+        elif side == "sell":
+            new_qty = max(0.0, curr_qty - qty)
+            # Cost basis: proportionally reduce
+            if curr_qty > 0:
+                holdings[code] = [new_qty, curr_cost_total * (new_qty / curr_qty)]
+            else:
+                holdings[code] = [0.0, 0.0]
+
+    result: dict[str, float] = {}
+    for code, (qty, cost_total) in holdings.items():
+        if qty > 0:
+            result[code] = cost_total / qty
+    return result
+
 
 def _merge_positions(positions: list[dict]) -> list[dict]:
     """Deduplicate positions by asset_code, computing weighted average cost."""
