@@ -351,6 +351,16 @@ async def ask_ai(
     ollama_base = settings.ollama_base_url
     model = settings.ollama_model
 
+    # Assistant priming: pre-fill the opening of the expected JSON structure.
+    # This forces the model to continue the JSON immediately, bypassing <think> blocks entirely.
+    _PRIMER = {
+        "summary":   '{"account_info": {"account_no": "',
+        "positions": '{"positions": [{"asset_code": "',
+        "cash":      '{"cash_balances": [{"currency": "',
+        "trades":    '{"trades": [{"date": "',
+    }
+    primer = _PRIMER.get(prompt_type, '{"')
+
     payload: dict = {
         "model": model,
         "messages": [
@@ -360,9 +370,10 @@ async def ask_ai(
                 "content": user_prompt,
                 "images": images_b64,
             },
+            {"role": "assistant", "content": primer},  # force JSON continuation
         ],
-        "stream": True,   # streaming: each token resets the per-chunk read timeout
-        "think": False,   # suppress qwen3 reasoning chain (Ollama 0.6+)
+        "stream": True,
+        "think": False,
         "options": {"temperature": 0.1, "num_ctx": 16384, "num_predict": 4096},
     }
 
@@ -395,13 +406,16 @@ async def ask_ai(
                 if chunk.get("done"):
                     break
 
-    # prefer content channel; fall back to thinking channel if content is empty
-    raw = "".join(content_parts).strip()
-    if not raw:
+    # Reconstruct full JSON: primer + model continuation
+    continuation = "".join(content_parts).strip()
+    if not continuation:
         thinking_raw = "".join(thinking_parts).strip()
         if thinking_raw:
             logger.warning("content channel empty — using thinking channel (%d chars)", len(thinking_raw))
-            raw = thinking_raw
+            continuation = thinking_raw
+
+    # Prepend the primer so we have a complete JSON string to parse
+    raw = (primer + continuation).strip()
 
     logger.info("Vision model raw (first 400): %s", raw[:400])
     return _parse_json_response(raw)
