@@ -498,20 +498,21 @@ async def upload_import_batch(
     source: str = Form(...),
     account_id: int = Form(...),
     file: UploadFile = File(...),
+    force: bool = Form(False),
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
 ):
     require_permissions(actor, "import.write")
     try:
         payload = await file.read()
-        batch = upload_csv(db, source=source, filename=file.filename or "upload.csv", account_id=account_id, content=payload)
+        batch = upload_csv(db, source=source, filename=file.filename or "upload.csv", account_id=account_id, content=payload, force=force)
         record_audit(
             db,
             actor,
             action="import.upload",
             entity_type="import_batch",
             entity_id=str(batch.id),
-            detail={"source": source, "account_id": account_id, "filename": file.filename or "upload.csv", "status": batch.status},
+            detail={"source": source, "account_id": account_id, "filename": file.filename or "upload.csv", "status": batch.status, "force": force},
         )
         return serialize_batch(batch)
     except ValueError as e:

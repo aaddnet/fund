@@ -279,6 +279,12 @@ export type PendingDeposit = {
   confirmed_as?: string;
 };
 
+export type ImportOverlap = {
+  overlap_count: number;
+  min_date: string;
+  max_date: string;
+};
+
 export type ImportBatch = {
   id: number;
   source: string;
@@ -289,6 +295,7 @@ export type ImportBatch = {
   parsed_count: number;
   confirmed_count: number;
   failed_reason?: string | null;
+  overlap?: ImportOverlap | null;   // set when existing transactions found in same date range
   imported_at?: string | null;
   preview_rows: ImportPreviewRow[];
   pending_deposits?: PendingDeposit[];
@@ -470,8 +477,9 @@ async function fetchJson<T>(path: string, init?: FetchOptions): Promise<T> {
         message = text;
       }
     }
-    const error = new Error(message) as Error & { status?: number };
+    const error = new Error(message) as Error & { status?: number; detail?: unknown };
     error.status = response.status;
+    try { error.detail = JSON.parse(message); } catch { /* message is plain string */ }
     throw error;
   }
 
@@ -626,11 +634,12 @@ export async function getReportOverview(params: { periodType: string; periodValu
   return fetchJson<ReportOverview>(`/reports/overview${buildQuery({ period_type: params.periodType, period_value: params.periodValue, fund_id: params.fundId, client_id: params.clientId, tx_type: params.txType })}`, { accessToken: params.accessToken });
 }
 
-export async function uploadImportBatch(payload: { source: string; accountId: number; file: File }) {
+export async function uploadImportBatch(payload: { source: string; accountId: number; file: File; force?: boolean }) {
   const formData = new FormData();
   formData.append('source', payload.source);
   formData.append('account_id', String(payload.accountId));
   formData.append('file', payload.file);
+  if (payload.force) formData.append('force', 'true');
   return fetchJson<ImportBatch>('/import/upload', {
     method: 'POST',
     body: formData,

@@ -78,14 +78,14 @@ def get_batch(db: Session, batch_id: int) -> Optional[ImportBatch]:
     return db.query(ImportBatch).filter(ImportBatch.id == batch_id).first()
 
 
-def upload_csv(db: Session, source: str, filename: str, account_id: int, content: bytes) -> ImportBatch:
+def upload_csv(db: Session, source: str, filename: str, account_id: int, content: bytes, force: bool = False) -> ImportBatch:
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise ValueError(f"Account {account_id} does not exist.")
 
     file_hash = hashlib.sha256(content).hexdigest()
     existing = db.query(ImportBatch).filter(ImportBatch.file_hash == file_hash).first()
-    if existing:
+    if existing and not force:
         raise ValueError(f"duplicate_file:{existing.id}")
 
     batch = ImportBatch(
@@ -108,6 +108,12 @@ def upload_csv(db: Session, source: str, filename: str, account_id: int, content
         batch.preview_json = json.dumps(rows)
         batch.status = IMPORT_STATUS_PARSED
         batch.failed_reason = None
+
+        # Overlap detection: count existing transactions for same account in the same date range
+        overlap_info = _check_overlap(db, account_id, rows)
+        if overlap_info["overlap_count"] > 0:
+            batch.failed_reason = json.dumps({"overlap": overlap_info})
+
         db.commit()
         db.refresh(batch)
         return batch
@@ -121,6 +127,36 @@ def upload_csv(db: Session, source: str, filename: str, account_id: int, content
         db.commit()
         db.refresh(batch)
         return batch
+
+
+def _check_overlap(db: Session, account_id: int, rows: list[dict]) -> dict:
+    """Check how many existing transactions fall in the same date range as the new rows."""
+    trade_dates = []
+    for r in rows:
+        try:
+            trade_dates.append(_parse_date_value(r["trade_date"]))
+        except Exception:
+            pass
+    if not trade_dates:
+        return {"overlap_count": 0, "min_date": None, "max_date": None}
+
+    min_date = min(trade_dates)
+    max_date = max(trade_dates)
+
+    overlap_count = (
+        db.query(Transaction)
+        .filter(
+            Transaction.account_id == account_id,
+            Transaction.trade_date >= min_date,
+            Transaction.trade_date <= max_date,
+        )
+        .count()
+    )
+    return {
+        "overlap_count": overlap_count,
+        "min_date": min_date.isoformat(),
+        "max_date": max_date.isoformat(),
+    }
 
 
 def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
@@ -217,6 +253,18 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
 
 
 def serialize_batch(batch: ImportBatch) -> dict[str, Any]:
+    # Separate overlap warning from regular failure reasons
+    overlap_info = None
+    display_reason = batch.failed_reason
+    if batch.failed_reason:
+        try:
+            parsed = json.loads(batch.failed_reason)
+            if isinstance(parsed, dict) and "overlap" in parsed:
+                overlap_info = parsed["overlap"]
+                display_reason = None   # not a failure, just a warning
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     return {
         "id": batch.id,
         "source": batch.source,
@@ -226,7 +274,8 @@ def serialize_batch(batch: ImportBatch) -> dict[str, Any]:
         "row_count": batch.row_count,
         "parsed_count": batch.parsed_count,
         "confirmed_count": batch.confirmed_count,
-        "failed_reason": batch.failed_reason,
+        "failed_reason": display_reason,
+        "overlap": overlap_info,   # { overlap_count, min_date, max_date } or null
         "imported_at": batch.imported_at.isoformat() if batch.imported_at else None,
         "preview_rows": batch.preview_rows,
         "pending_deposits": batch.pending_deposit_rows,
