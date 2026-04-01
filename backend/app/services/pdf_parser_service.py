@@ -58,7 +58,6 @@ _JPEG_QUALITY = 85   # JPEG quality; 85 keeps table text legible, 5-10× smaller
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "/no_think "  # disable qwen3 thinking mode — prevents token explosion
     "You are a financial statement data extraction API. "
     "Output ONLY valid JSON. No prose, no markdown fences, no explanation."
 )
@@ -364,9 +363,7 @@ async def ask_ai(
         ],
         "stream": True,   # streaming: each token resets the per-chunk read timeout
         "think": False,   # suppress qwen3 reasoning chain (Ollama 0.6+)
-        "options": {"temperature": 0.1, "num_ctx": 8192, "num_predict": 2048},
-        # Note: JSON Schema "format" intentionally omitted — it conflicts with
-        # streaming + think mode in qwen3-vl, causing empty content output.
+        "options": {"temperature": 0.1, "num_ctx": 16384, "num_predict": 4096},
     }
 
     logger.info(
@@ -528,8 +525,10 @@ def _merge_positions(positions: list[dict]) -> list[dict]:
 
 def _parse_json_response(raw: str) -> dict:
     """Strip think tags + markdown fences, extract first JSON object."""
-    # Remove <think>...</think> reasoning blocks
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    # Remove <think>...</think> reasoning blocks (including unclosed tags)
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    raw = re.sub(r"<think>.*$", "", raw, flags=re.DOTALL)  # unclosed <think>
+    raw = raw.strip()
 
     # Strip markdown code fences
     if raw.startswith("```"):
