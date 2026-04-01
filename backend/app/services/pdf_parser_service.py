@@ -398,9 +398,10 @@ async def ask_ai(
     # prefer content channel; fall back to thinking channel if content is empty
     raw = "".join(content_parts).strip()
     if not raw:
-        raw = "".join(thinking_parts).strip()
-        if raw:
-            logger.warning("content channel empty — using thinking channel (%d chars)", len(raw))
+        thinking_raw = "".join(thinking_parts).strip()
+        if thinking_raw:
+            logger.warning("content channel empty — using thinking channel (%d chars)", len(thinking_raw))
+            raw = thinking_raw
 
     logger.info("Vision model raw (first 400): %s", raw[:400])
     return _parse_json_response(raw)
@@ -524,38 +525,75 @@ def _merge_positions(positions: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _parse_json_response(raw: str) -> dict:
-    """Strip think tags + markdown fences, extract first JSON object."""
-    # Remove <think>...</think> reasoning blocks (including unclosed tags)
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-    raw = re.sub(r"<think>.*$", "", raw, flags=re.DOTALL)  # unclosed <think>
-    raw = raw.strip()
+    """Extract JSON from model output.
 
-    # Strip markdown code fences
-    if raw.startswith("```"):
-        lines = raw.split("\n")
+    Strategy (in order):
+    1. Strip markdown fences and try direct parse.
+    2. Find last JSON object/array in text (handles prose + JSON).
+    3. Search inside <think> blocks — qwen3-vl often embeds JSON there.
+    4. Attempt truncation recovery.
+    """
+    if not raw:
+        return {"parse_error": True, "raw_text": ""}
+
+    # ── Step 1: clean content channel output (may have markdown fences) ──
+    cleaned = _strip_fences(raw)
+    result = _try_parse(cleaned)
+    if result is not None:
+        return result
+
+    # ── Step 2: find last JSON-like block in full text ──
+    # Search from end so we skip reasoning prose and land on final answer
+    for match in reversed(list(re.finditer(r"(\{[\s\S]*\}|\[[\s\S]*\])", raw))):
+        result = _try_parse(match.group(0))
+        if result is not None:
+            return result
+
+    # ── Step 3: extract content from inside <think>...</think> blocks ──
+    # qwen3-vl sometimes puts the JSON inside reasoning when content channel is empty
+    think_contents = re.findall(r"<think>([\s\S]*?)</think>", raw, re.DOTALL)
+    for block in reversed(think_contents):
+        for match in reversed(list(re.finditer(r"(\{[\s\S]*\}|\[[\s\S]*\])", block))):
+            result = _try_parse(match.group(0))
+            if result is not None:
+                logger.info("JSON found inside <think> block")
+                return result
+
+    # ── Step 4: truncation recovery on cleaned text ──
+    recovered = _recover_truncated_json(cleaned)
+    if recovered:
+        return recovered
+
+    logger.warning("JSON parse failed | raw: %s", raw[:500])
+    return {"parse_error": True, "raw_text": raw[:1000]}
+
+
+def _strip_fences(text: str) -> str:
+    """Remove <think> tags and markdown code fences."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL)
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
         inner = lines[1:] if lines[0].startswith("```") else lines
         if inner and inner[-1].strip() == "```":
             inner = inner[:-1]
-        raw = "\n".join(inner).strip()
+        text = "\n".join(inner).strip()
+    return text
 
-    # Find first complete JSON object or array
-    if not raw.startswith(("{", "[")):
-        m = re.search(r"[\[{][\s\S]*[\]}]", raw)
-        if m:
-            raw = m.group(0)
 
+def _try_parse(text: str) -> dict | None:
+    """Try json.loads; return None on failure. Wraps lists in {"positions": [...]}."""
+    text = text.strip()
+    if not text or text[0] not in ("{", "["):
+        return None
     try:
-        parsed = json.loads(raw)
-        # If root is a list, wrap it
+        parsed = json.loads(text)
         if isinstance(parsed, list):
             return {"positions": parsed}
         return parsed
     except json.JSONDecodeError:
-        recovered = _recover_truncated_json(raw)
-        if recovered:
-            return recovered
-        logger.warning("JSON parse failed | raw: %s", raw[:500])
-        return {"parse_error": True, "raw_text": raw[:1000]}
+        return None
 
 
 def _recover_truncated_json(raw: str) -> dict | None:
