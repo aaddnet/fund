@@ -122,23 +122,62 @@ Return ONLY the JSON object.
 """
 
 TRADE_PROMPT = f"""
-Extract trade/transaction records from this broker statement image. Return a JSON object:
+从账单图片中提取所有交易记录，输出 JSON 对象。
+
+每条记录包含以下字段：
+- date: 交易日期 YYYY-MM-DD
+- tx_type: 交易类型，从以下选择：
+    股票/ETF: buy | sell
+    期权: buy_option | sell_option | option_expire | option_exercise
+    现金: deposit | withdrawal | dividend | dividend_tax | interest_credit | interest_debit | fee | adjustment
+    换汇: fx_trade
+    企业行动: stock_split | reverse_split | rights_issue | spinoff
+- asset_code: 资产代码（无则 null）
+- quantity: 数量（买入正数，卖出负数，无则 null）
+- price: 成交单价（无则 null）
+- currency: 货币代码（如 USD / HKD / CNY）
+- amount: 金额（正=资金流入账户，负=资金流出账户，无则 null）
+- fee: 手续费（负数或0）
+- description: 账单原始描述（原文保留）
+
+换汇交易额外字段（tx_type=fx_trade）：
+- fx_from_currency: 卖出货币（如 "USD"）
+- fx_from_amount: 卖出金额（负数，如 -50000）
+- fx_to_currency: 买入货币（如 "HKD"）
+- fx_to_amount: 买入金额（正数，如 390000）
+- fx_rate: 成交汇率（如 7.80）
+
+IBKR 换汇记录特征：
+- 说明栏包含 "Forex" 或 "USD.HKD" 格式
+- 两行对应一笔：卖出行（负数）+ 买入行（正数）→ 合并为一条 fx_trade 记录
+
+期权交易额外字段：
+- option_underlying: 标的代码（如 "NIO"）
+- option_expiry: 到期日 YYYY-MM-DD
+- option_strike: 行权价（如 4.00）
+- option_type: "call" 或 "put"
+- option_multiplier: 合约乘数（通常 100）
+
+{_NUMBER_RULES}
+
+输出格式（JSON 对象）：
 {{
   "trades": [
     {{
       "date": "YYYY-MM-DD",
+      "tx_type": "buy",
       "asset_code": "AAPL",
-      "side": "buy|sell",
       "quantity": 100,
       "price": 182.50,
       "currency": "USD",
-      "commission": 1.00
+      "amount": -18250.00,
+      "fee": -1.00,
+      "description": "原始描述"
     }}
   ]
 }}
 
-{_NUMBER_RULES}
-Return ONLY the JSON object.
+只输出 JSON 对象，不要任何解释文字。
 """
 
 # AI-04: Broker-specific variants override default prompts
@@ -761,6 +800,9 @@ def confirm_pdf_batch(db, batch_id: int) -> PdfImportBatch:
                 note="pdf_import",
             ))
 
+    # Write trade records as Transaction rows (V4)
+    _write_trade_transactions(db, batch, data.get("trades", []))
+
     capital_events = data.get("capital_events", [])
     if capital_events:
         batch.pending_deposits = json.dumps(capital_events)
@@ -771,3 +813,95 @@ def confirm_pdf_batch(db, batch_id: int) -> PdfImportBatch:
     db.commit()
     db.refresh(batch)
     return batch
+
+
+def _write_trade_transactions(db, batch: PdfImportBatch, trades: list[dict]) -> None:
+    """Write AI-parsed trade records as Transaction rows with V4 extended fields."""
+    from app.models import Transaction as _Tx
+
+    snap_date = batch.snapshot_date
+
+    # Remove previously imported transactions for this batch to allow re-confirm
+    db.query(_Tx).filter(
+        _Tx.import_batch_id == batch.id,
+        _Tx.source == "pdf_import",
+    ).delete(synchronize_session=False)
+
+    for t in trades:
+        tx_type = str(t.get("tx_type") or t.get("side") or "buy").lower()
+
+        # Classify category
+        if tx_type == "fx_trade":
+            tx_category = "FX"
+        elif tx_type in (
+            "deposit", "withdrawal", "dividend", "dividend_tax",
+            "interest_credit", "interest_debit", "fee", "adjustment",
+            "substitute_payment", "staking",
+        ):
+            tx_category = "CASH"
+        elif tx_type in ("margin_interest", "margin_adjustment"):
+            tx_category = "MARGIN"
+        elif tx_type in ("stock_split", "reverse_split", "rights_issue", "spinoff", "merger"):
+            tx_category = "CORPORATE"
+        else:
+            tx_category = "EQUITY"
+
+        trade_date_raw = t.get("date") or str(snap_date)
+        try:
+            from datetime import date as _date
+            trade_date = _date.fromisoformat(str(trade_date_raw)[:10])
+        except ValueError:
+            trade_date = snap_date
+
+        qty_raw = t.get("quantity")
+        price_raw = t.get("price")
+        qty = Decimal(str(qty_raw)) if qty_raw is not None else None
+        price = Decimal(str(price_raw)) if price_raw is not None else None
+        fee_raw = t.get("fee") or t.get("commission") or "0"
+        fee = Decimal(str(fee_raw))
+        amount_raw = t.get("amount")
+        amount = Decimal(str(amount_raw)) if amount_raw is not None else None
+        currency = str(t.get("currency") or "USD").upper()
+        asset_code = str(t.get("asset_code") or "").strip().upper() or None
+
+        # Option fields
+        option_expiry = None
+        if t.get("option_expiry"):
+            try:
+                from datetime import date as _date2
+                option_expiry = _date2.fromisoformat(str(t["option_expiry"])[:10])
+            except ValueError:
+                pass
+
+        # FX fields
+        fx_from_amt = Decimal(str(t["fx_from_amount"])) if t.get("fx_from_amount") is not None else None
+        fx_to_amt = Decimal(str(t["fx_to_amount"])) if t.get("fx_to_amount") is not None else None
+        fx_rate = Decimal(str(t["fx_rate"])) if t.get("fx_rate") is not None else None
+
+        db.add(_Tx(
+            account_id=batch.account_id,
+            tx_category=tx_category,
+            tx_type=tx_type,
+            source="pdf_import",
+            trade_date=trade_date,
+            currency=currency,
+            amount=amount,
+            fee=fee,
+            description=t.get("description"),
+            asset_code=asset_code,
+            asset_name=t.get("asset_name"),
+            asset_type=t.get("asset_type"),
+            quantity=qty,
+            price=price,
+            option_underlying=t.get("option_underlying"),
+            option_expiry=option_expiry,
+            option_strike=Decimal(str(t["option_strike"])) if t.get("option_strike") is not None else None,
+            option_type=t.get("option_type"),
+            option_multiplier=t.get("option_multiplier"),
+            fx_from_currency=t.get("fx_from_currency"),
+            fx_from_amount=fx_from_amt,
+            fx_to_currency=t.get("fx_to_currency"),
+            fx_to_amount=fx_to_amt,
+            fx_rate=fx_rate,
+            import_batch_id=batch.id,
+        ))

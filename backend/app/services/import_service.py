@@ -141,6 +141,17 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
     deposit_rows = [r for r in preview_rows if r["tx_type"] == DEPOSIT_PENDING_TX_TYPE]
 
     for item in trade_rows:
+        tx_type_lower = (item["tx_type"] or "").lower()
+        # Determine category: FX trades vs regular equity vs cash flows
+        if tx_type_lower in ("forex_buy", "forex_sell"):
+            tx_category = "FX"
+        elif tx_type_lower in ("cash_in", "cash_out", "deposit", "withdrawal",
+                               "dividend", "interest_credit", "interest_debit",
+                               "fee", "adjustment"):
+            tx_category = "CASH"
+        else:
+            tx_category = "EQUITY"
+
         db.add(
             Transaction(
                 account_id=batch.account_id,
@@ -152,6 +163,8 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
                 tx_type=item["tx_type"],
                 fee=Decimal(str(item.get("fee", "0"))),
                 import_batch_id=batch.id,
+                tx_category=tx_category,
+                source="csv_import",
             )
         )
 

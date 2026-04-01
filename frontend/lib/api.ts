@@ -146,14 +146,72 @@ export type Position = {
 export type Transaction = {
   id: number;
   account_id: number;
-  trade_date: string;
-  asset_code: string;
-  quantity: number;
-  price: number;
-  currency: string;
+  // Classification
+  tx_category: string;      // EQUITY / CASH / FX / MARGIN / CORPORATE
   tx_type: string;
+  source: string;           // manual / pdf_import / csv_import / migration
+  // Timing
+  trade_date: string;
+  settle_date?: string | null;
+  // Core
+  currency: string;
+  amount?: number | null;
   fee: number;
+  description?: string | null;
+  // EQUITY fields
+  asset_code?: string | null;
+  asset_name?: string | null;
+  asset_type?: string | null;
+  quantity?: number | null;
+  price?: number | null;
+  realized_pnl?: number | null;
+  // Option fields
+  option_underlying?: string | null;
+  option_expiry?: string | null;
+  option_strike?: number | null;
+  option_type?: string | null;      // call / put
+  option_multiplier?: number | null;
+  // FX fields
+  fx_from_currency?: string | null;
+  fx_from_amount?: number | null;
+  fx_to_currency?: string | null;
+  fx_to_amount?: number | null;
+  fx_rate?: number | null;
+  fx_pnl?: number | null;
+  // Corporate action fields
+  corporate_ratio?: number | null;
+  corporate_ref_code?: string | null;
+  // Metadata
   import_batch_id?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type FXSummary = {
+  from_currency: string;
+  to_currency: string;
+  total_from: number;
+  total_to: number;
+  avg_rate: number;
+  total_fee_usd: number;
+  realized_pnl_usd: number;
+};
+
+export type CashLedgerEvent = {
+  tx_id: number;
+  trade_date: string;
+  settle_date?: string | null;
+  tx_category: string;
+  tx_type: string;
+  description?: string | null;
+  delta: number;
+  balance_after: number;
+};
+
+export type CashBalances = {
+  account_id: number;
+  as_of_date: string;
+  balances: Record<string, number>;
 };
 
 export type NavRecord = {
@@ -710,6 +768,41 @@ export async function upsertCashPosition(payload: { account_id: number; currency
 
 export async function deleteCashPosition(cashId: number) {
   return fetchJson<void>(`/cash/${cashId}`, { method: 'DELETE' });
+}
+
+// --- V4: FX transactions & cash ledger ---
+
+export async function createFxTransaction(payload: {
+  account_id: number;
+  trade_date: string;
+  fx_from_currency: string;
+  fx_from_amount: number;
+  fx_to_currency: string;
+  fx_to_amount: number;
+  fee?: number;
+  fee_currency?: string;
+  description?: string;
+}) {
+  return fetchJson<Transaction>('/transaction/fx', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function getCashLedger(accountId: number, currency: string, accessToken?: string | null) {
+  return fetchJson<{ account_id: number; currency: string; events: CashLedgerEvent[] }>(
+    `/accounts/${accountId}/cash-ledger?currency=${encodeURIComponent(currency)}`,
+    { accessToken },
+  );
+}
+
+export async function getCashBalances(accountId: number, asOfDate?: string, accessToken?: string | null) {
+  const q = asOfDate ? `?as_of_date=${asOfDate}` : '';
+  return fetchJson<CashBalances>(`/accounts/${accountId}/cash-balances${q}`, { accessToken });
+}
+
+export async function getFxSummary(accountId: number, accessToken?: string | null) {
+  return fetchJson<{ account_id: number; fx_trades: FXSummary[] }>(
+    `/accounts/${accountId}/fx-summary`,
+    { accessToken },
+  );
 }
 
 export async function getShareRegister(params?: { fundId?: number; clientId?: number; accessToken?: string | null }) {

@@ -77,6 +77,9 @@ class Position(Base, TimestampMixin):
     currency = Column(String(10), nullable=False)
     snapshot_date = Column(Date, nullable=False)
     source_batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
+    is_checkpoint = Column(Boolean, nullable=True, default=True)
+    # True = system-computed checkpoint snapshot
+    checkpoint_tx_id = Column(Integer, nullable=True)
 
 
 class ImportBatch(Base, TimestampMixin):
@@ -125,14 +128,62 @@ class Transaction(Base, TimestampMixin):
     )
     id = Column(Integer, primary_key=True)
     account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
-    trade_date = Column(Date, nullable=False)
-    asset_code = Column(String(50), nullable=False)
-    quantity = Column(Numeric(24, 8), nullable=False)
-    price = Column(Numeric(24, 8), nullable=False)
-    currency = Column(String(10), nullable=False)
-    tx_type = Column(String(50), nullable=False)
-    fee = Column(Numeric(24, 8), nullable=False, default=0)
     import_batch_id = Column(Integer, ForeignKey("import_batch.id"))
+
+    # Classification
+    tx_category = Column(String(20), nullable=False, default="EQUITY")
+    # EQUITY / CASH / FX / MARGIN / CORPORATE
+    tx_type = Column(String(50), nullable=False)
+    source = Column(String(20), nullable=False, default="manual")
+    # manual / pdf_import / csv_import / system / migration
+
+    # Timing
+    trade_date = Column(Date, nullable=False)
+    settle_date = Column(Date, nullable=True)
+
+    # Core amount (nullable: CASH/FX don't use amount in the equity sense)
+    currency = Column(String(10), nullable=False)
+    amount = Column(Numeric(24, 8), nullable=True)
+    # positive = cash inflow, negative = cash outflow
+    fee = Column(Numeric(24, 8), nullable=False, default=0)
+
+    # Original description
+    description = Column(Text, nullable=True)
+
+    # ── EQUITY fields ──────────────────────────────────────────────────────
+    asset_code = Column(String(50), nullable=True)      # nullable for CASH/FX
+    asset_name = Column(String(200), nullable=True)
+    asset_type = Column(String(20), nullable=True)
+    # stock / etf / crypto / option / fund / warrant
+    quantity = Column(Numeric(24, 8), nullable=True)    # buy=positive, sell=negative
+    price = Column(Numeric(24, 8), nullable=True)       # unit price
+    realized_pnl = Column(Numeric(24, 8), nullable=True)
+
+    # ── Option fields ──────────────────────────────────────────────────────
+    option_underlying = Column(String(20), nullable=True)
+    option_expiry = Column(Date, nullable=True)
+    option_strike = Column(Numeric(24, 8), nullable=True)
+    option_type = Column(String(4), nullable=True)      # call / put
+    option_multiplier = Column(Integer, nullable=True, default=100)
+
+    # ── FX fields ──────────────────────────────────────────────────────────
+    fx_from_currency = Column(String(10), nullable=True)
+    fx_from_amount = Column(Numeric(24, 8), nullable=True)   # negative (sold)
+    fx_to_currency = Column(String(10), nullable=True)
+    fx_to_amount = Column(Numeric(24, 8), nullable=True)     # positive (bought)
+    fx_rate = Column(Numeric(18, 8), nullable=True)
+    fx_pnl = Column(Numeric(24, 8), nullable=True)
+
+    # ── Corporate action fields ────────────────────────────────────────────
+    corporate_ratio = Column(Numeric(10, 6), nullable=True)
+    corporate_ref_code = Column(String(50), nullable=True)
+
+    @property
+    def net_amount(self):
+        """Net cash impact = amount + fee (fee is already negative)."""
+        a = self.amount or 0
+        f = self.fee or 0
+        return float(a) + float(f)
 
 
 class ExchangeRate(Base, TimestampMixin):

@@ -1253,6 +1253,129 @@ def get_transaction(transaction_id: int, db: Session = Depends(get_db), actor: A
     return _serialize_transaction(item)
 
 
+@router.post("/transaction/fx")
+def create_fx_transaction(req: dict, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """Record a manual FX (foreign exchange) trade."""
+    require_permissions(actor, "accounts.write")
+    from app.services.fx_service import record_fx_trade
+    from decimal import Decimal as _Dec
+
+    account_id = req.get("account_id")
+    if not account_id:
+        raise HTTPException(status_code=422, detail="account_id required.")
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found.")
+
+    try:
+        trade_date_str = req["trade_date"]
+        trade_date_obj = date.fromisoformat(trade_date_str)
+        tx = record_fx_trade(
+            account_id=account_id,
+            trade_date=trade_date_obj,
+            from_currency=req["fx_from_currency"],
+            from_amount=_Dec(str(req["fx_from_amount"])),
+            to_currency=req["fx_to_currency"],
+            to_amount=_Dec(str(req["fx_to_amount"])),
+            fee=_Dec(str(req.get("fee", "0"))),
+            fee_currency=req.get("fee_currency"),
+            description=req.get("description"),
+            source="manual",
+            db=db,
+        )
+        db.commit()
+        db.refresh(tx)
+        return _serialize_transaction(tx)
+    except (KeyError, Exception) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/accounts/{account_id}/cash-ledger")
+def get_cash_ledger(
+    account_id: int,
+    currency: str = Query(...),
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Return cash ledger history for a specific account+currency."""
+    require_permissions(actor, "accounts.read")
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    from app.services.cash_ledger import get_cash_history
+    events = get_cash_history(account_id, currency, db)
+    return {
+        "account_id": account_id,
+        "currency": currency.upper(),
+        "events": [
+            {
+                "tx_id": e.tx_id,
+                "trade_date": e.trade_date.isoformat(),
+                "settle_date": e.settle_date.isoformat() if e.settle_date else None,
+                "tx_category": e.tx_category,
+                "tx_type": e.tx_type,
+                "description": e.description,
+                "delta": float(e.delta),
+                "balance_after": float(e.balance_after),
+            }
+            for e in events
+        ],
+    }
+
+
+@router.get("/accounts/{account_id}/cash-balances")
+def get_cash_balances(
+    account_id: int,
+    as_of_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Return all currency balances for account, computed from Transaction events."""
+    require_permissions(actor, "accounts.read")
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    from app.services.cash_ledger import get_all_cash_balances
+    from datetime import date as _date
+    eval_date = as_of_date or _date.today()
+    balances = get_all_cash_balances(account_id, eval_date, db)
+    return {
+        "account_id": account_id,
+        "as_of_date": eval_date.isoformat(),
+        "balances": {ccy: float(amt) for ccy, amt in sorted(balances.items())},
+    }
+
+
+@router.get("/accounts/{account_id}/fx-summary")
+def get_fx_summary_endpoint(
+    account_id: int,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Return FX trade summary and P&L for an account."""
+    require_permissions(actor, "accounts.read")
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    from app.services.fx_service import get_fx_summary
+    summaries = get_fx_summary(account_id, db)
+    return {
+        "account_id": account_id,
+        "fx_trades": [
+            {
+                "from_currency": s.from_currency,
+                "to_currency": s.to_currency,
+                "total_from": float(s.total_from),
+                "total_to": float(s.total_to),
+                "avg_rate": float(s.avg_rate),
+                "total_fee_usd": float(s.total_fee_usd),
+                "realized_pnl_usd": float(s.realized_pnl_usd),
+            }
+            for s in summaries
+        ],
+    }
+
+
 @router.get("/customer/{client_id}")
 def get_customer_view(client_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "customer.read")
@@ -1596,20 +1719,47 @@ def _serialize_position(item: Position) -> dict:
 
 
 def _serialize_transaction(item: Transaction) -> dict:
-    return {
+    d = {
         "id": item.id,
         "account_id": item.account_id,
+        "tx_category": getattr(item, "tx_category", None) or "EQUITY",
+        "tx_type": item.tx_type,
+        "source": getattr(item, "source", None) or "manual",
         "trade_date": item.trade_date.isoformat(),
+        "settle_date": item.settle_date.isoformat() if getattr(item, "settle_date", None) else None,
+        "currency": item.currency,
+        "amount": _decimal(getattr(item, "amount", None)),
+        "fee": _decimal(item.fee),
+        "description": getattr(item, "description", None),
+        # EQUITY fields
         "asset_code": item.asset_code,
+        "asset_name": getattr(item, "asset_name", None),
+        "asset_type": getattr(item, "asset_type", None),
         "quantity": _decimal(item.quantity),
         "price": _decimal(item.price),
-        "currency": item.currency,
-        "tx_type": item.tx_type,
-        "fee": _decimal(item.fee),
+        "realized_pnl": _decimal(getattr(item, "realized_pnl", None)),
+        # Option fields
+        "option_underlying": getattr(item, "option_underlying", None),
+        "option_expiry": item.option_expiry.isoformat() if getattr(item, "option_expiry", None) else None,
+        "option_strike": _decimal(getattr(item, "option_strike", None)),
+        "option_type": getattr(item, "option_type", None),
+        "option_multiplier": getattr(item, "option_multiplier", None),
+        # FX fields
+        "fx_from_currency": getattr(item, "fx_from_currency", None),
+        "fx_from_amount": _decimal(getattr(item, "fx_from_amount", None)),
+        "fx_to_currency": getattr(item, "fx_to_currency", None),
+        "fx_to_amount": _decimal(getattr(item, "fx_to_amount", None)),
+        "fx_rate": _decimal(getattr(item, "fx_rate", None)),
+        "fx_pnl": _decimal(getattr(item, "fx_pnl", None)),
+        # Corporate action fields
+        "corporate_ratio": _decimal(getattr(item, "corporate_ratio", None)),
+        "corporate_ref_code": getattr(item, "corporate_ref_code", None),
+        # Metadata
         "import_batch_id": item.import_batch_id,
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }
+    return d
 
 
 def _serialize_nav(item, db: Session = None) -> dict:
