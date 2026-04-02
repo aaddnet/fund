@@ -17,11 +17,8 @@ from app.db import get_db
 from app.models import AuthSession, AuthUser
 
 ROLE_ADMIN = "admin"
-ROLE_OPS = "ops"
-ROLE_CLIENT_READONLY = "client-readonly"
-ROLE_OPS_READONLY = "ops-readonly"
-ROLE_SUPPORT = "support"
-ALLOWED_ROLES = {ROLE_ADMIN, ROLE_OPS, ROLE_CLIENT_READONLY, ROLE_OPS_READONLY, ROLE_SUPPORT}
+ROLE_READONLY = "readonly"
+ALLOWED_ROLES = {ROLE_ADMIN, ROLE_READONLY}
 PBKDF2_ITERATIONS = 390000
 PASSWORD_MIN_LENGTH = 10
 PASSWORD_COMPLEXITY_PATTERN = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$")
@@ -32,12 +29,7 @@ PERMISSIONS_BY_ROLE = {
         "audit.read",
         "accounts.read",
         "accounts.write",
-        "clients.read",
-        "clients.write",
-        "customer.read",
         "dashboard.read",
-        "fees.read",
-        "fees.write",
         "import.read",
         "import.write",
         "nav.read",
@@ -49,59 +41,16 @@ PERMISSIONS_BY_ROLE = {
         "reports.read",
         "scheduler.run",
         "scheduler.read",
-        "shares.read",
-        "shares.write",
     },
-    ROLE_OPS: {
-        "audit.read",
+    ROLE_READONLY: {
         "accounts.read",
-        "clients.read",
-        "customer.read",
         "dashboard.read",
-        "fees.read",
-        "fees.write",
-        "import.read",
-        "import.write",
-        "nav.read",
-        "nav.write",
-        "price.read",
-        "price.write",
-        "rates.read",
-        "rates.write",
-        "reports.read",
-        "scheduler.run",
-        "scheduler.read",
-        "shares.read",
-        "shares.write",
-    },
-    ROLE_OPS_READONLY: {
-        "accounts.read",
-        "clients.read",
-        "customer.read",
-        "dashboard.read",
-        "fees.read",
         "import.read",
         "nav.read",
         "price.read",
         "rates.read",
         "reports.read",
         "scheduler.read",
-        "shares.read",
-    },
-    ROLE_SUPPORT: {
-        "accounts.read",
-        "clients.read",
-        "customer.read",
-        "dashboard.read",
-        "nav.read",
-        "reports.read",
-        "shares.read",
-    },
-    ROLE_CLIENT_READONLY: {
-        "customer.read",
-        "nav.read",
-        "reports.read",
-        "shares.read",
     },
 }
 
@@ -110,17 +59,12 @@ PERMISSIONS_BY_ROLE = {
 class Actor:
     role: str
     operator_id: str
-    client_scope_id: Optional[int] = None
     auth_mode: str = "dev"
     user_id: Optional[int] = None
     session_id: Optional[int] = None
     username: Optional[str] = None
     permissions: tuple[str, ...] = ()
     auth_via_cookie: bool = False
-
-    @property
-    def is_client(self) -> bool:
-        return self.role == ROLE_CLIENT_READONLY
 
     def has_permission(self, permission: str) -> bool:
         return permission in self.permissions
@@ -261,9 +205,6 @@ def _revoke_refresh_family(db: Session, refresh_family_id: Optional[str], *, rea
         session.refresh_reused_at = session.refresh_reused_at or now
 
 
-def _validate_client_scope(db: Session, role: str, client_scope_id: Optional[int]) -> Optional[int]:
-    # v1: client scope is not used (no client/LP concept)
-    return None
 
 
 def list_auth_users(db: Session) -> list[AuthUser]:
@@ -276,9 +217,9 @@ def create_auth_user(
     username: str,
     password: str,
     role: str,
-    client_scope_id: Optional[int],
     display_name: Optional[str],
     is_active: bool,
+    **_kwargs,
 ) -> AuthUser:
     normalized_username = username.strip()
     normalized_role = role.strip().lower()
@@ -293,7 +234,6 @@ def create_auth_user(
         username=normalized_username,
         password_hash=hash_password(password),
         role=normalized_role,
-        client_scope_id=_validate_client_scope(db, normalized_role, client_scope_id),
         display_name=display_name.strip() if display_name else normalized_username,
         is_active=bool(is_active),
         password_changed_at=_utcnow(),
@@ -310,9 +250,9 @@ def update_auth_user(
     *,
     user_id: int,
     role: Optional[str] = None,
-    client_scope_id: Optional[int] = None,
     display_name: Optional[str] = None,
     is_active: Optional[bool] = None,
+    **_kwargs,
 ) -> AuthUser:
     user = db.query(AuthUser).filter(AuthUser.id == user_id).first()
     if not user:
@@ -327,10 +267,6 @@ def update_auth_user(
         user.display_name = display_name.strip() or user.username
     if is_active is not None:
         user.is_active = bool(is_active)
-    if client_scope_id is not None or next_role == ROLE_CLIENT_READONLY:
-        user.client_scope_id = _validate_client_scope(db, next_role, client_scope_id)
-    elif next_role != ROLE_CLIENT_READONLY:
-        user.client_scope_id = None
 
     if is_active is False:
         _revoke_user_sessions(db, user.id)
@@ -443,14 +379,6 @@ def login_with_password(db: Session, username: str, password: str) -> Authentica
 
     _clear_failed_login(user)
 
-    if user.role == ROLE_CLIENT_READONLY and user.client_scope_id is None:
-        for item in settings.auth_bootstrap_users or []:
-            if item.get("username") == user.username and item.get("client_scope_id") is not None:
-                client_exists = db.query(Client.id).filter(Client.id == item["client_scope_id"]).first()
-                if client_exists:
-                    user.client_scope_id = item["client_scope_id"]
-                    break
-
     _revoke_user_sessions(db, user.id)
     db.commit()
     db.refresh(user)
@@ -469,7 +397,6 @@ def _build_actor(user: AuthUser, session: AuthSession, *, auth_via_cookie: bool 
     return Actor(
         role=user.role,
         operator_id=user.username,
-        client_scope_id=user.client_scope_id,
         auth_mode="session",
         user_id=user.id,
         session_id=session.id,
@@ -569,10 +496,8 @@ async def get_actor(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     access_cookie: Optional[str] = Cookie(default=None, alias=settings.auth_access_cookie_name),
     role_header: Optional[str] = Header(default=None, alias=settings.auth_role_header),
-    client_id_header: Optional[str] = Header(default=None, alias=settings.auth_client_id_header),
     operator_header: Optional[str] = Header(default=None, alias=settings.auth_operator_header),
     dev_role: Optional[str] = Query(default=None, alias="auth_dev_role"),
-    dev_client_scope_id: Optional[int] = Query(default=None, alias="auth_dev_client_id"),
     dev_operator_id: Optional[str] = Query(default=None, alias="auth_dev_operator_id"),
 ) -> Actor:
     if not settings.auth_enabled:
@@ -591,21 +516,12 @@ async def get_actor(
     if settings.auth_mode in {"dev", "hybrid"} or settings.auth_allow_dev_fallback:
         selected_role = (role_header or dev_role or ROLE_ADMIN).strip().lower()
         selected_operator_id = (operator_header or dev_operator_id or selected_role or "unknown").strip()
-        selected_client_id = dev_client_scope_id
-        if client_id_header is not None:
-            try:
-                selected_client_id = int(client_id_header)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail="invalid x-client-id header") from exc
 
         if selected_role not in ALLOWED_ROLES:
             raise HTTPException(status_code=403, detail=f"unsupported role: {selected_role}")
-        if selected_role == ROLE_CLIENT_READONLY and selected_client_id is None:
-            raise HTTPException(status_code=403, detail="client-readonly requires client scope")
         return Actor(
             role=selected_role,
             operator_id=selected_operator_id,
-            client_scope_id=selected_client_id,
             auth_mode="dev",
             permissions=permissions_for_role(selected_role),
         )
@@ -626,12 +542,6 @@ def require_permissions(actor: Actor, *permissions: str) -> Actor:
     return actor
 
 
-def require_client_scope(actor: Actor, client_id: Optional[int]) -> Actor:
-    if actor.role != ROLE_CLIENT_READONLY:
-        return actor
-    if client_id is None or actor.client_scope_id != client_id:
-        raise HTTPException(status_code=403, detail="client scope mismatch")
-    return actor
 
 
 def change_password(db: Session, user_id: int, old_password: str, new_password: str) -> None:
@@ -660,7 +570,6 @@ def list_users(db: Session) -> list[dict]:
             "role": u.role,
             "display_name": u.display_name,
             "is_active": u.is_active,
-            "client_scope_id": u.client_scope_id,
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
             "password_changed_at": u.password_changed_at.isoformat() if u.password_changed_at else None,
             "failed_login_attempts": u.failed_login_attempts,
@@ -680,9 +589,3 @@ def unlock_user(db: Session, user_id: int) -> dict:
     return {"id": user.id, "username": user.username, "locked_until": None, "failed_login_attempts": 0}
 
 
-def apply_client_scope_filters(actor: Actor, fund_id: Optional[int], client_id: Optional[int]) -> tuple[Optional[int], Optional[int]]:
-    if actor.role != ROLE_CLIENT_READONLY:
-        return fund_id, client_id
-    if actor.client_scope_id is None:
-        raise HTTPException(status_code=403, detail="client scope is required")
-    return fund_id, actor.client_scope_id

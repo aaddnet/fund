@@ -16,7 +16,6 @@ export type AuthUser = {
   username: string;
   role: string;
   permissions: string[];
-  client_scope_id?: number | null;
   display_name?: string | null;
   is_active: boolean;
   last_login_at?: string | null;
@@ -240,8 +239,6 @@ export type NavRecord = {
   id: number;
   nav_date: string;
   total_assets_usd: number;
-  total_shares: number;
-  nav_per_share: number;
   is_locked: boolean;
 };
 
@@ -416,22 +413,24 @@ async function fetchJson<T>(path: string, init?: FetchOptions): Promise<T> {
   if (!response.ok) {
     let message = `API ${path} failed with ${response.status}`;
     try {
-      const body = await response.json();
-      if (typeof body.detail === 'string') {
-        message = body.detail;
-      } else if (Array.isArray(body.detail)) {
-        message = (body.detail as Array<{ msg?: string }>).map(e => e.msg || JSON.stringify(e)).join('; ');
-      } else if (body.detail) {
-        message = JSON.stringify(body.detail);
-      } else {
-        message = JSON.stringify(body);
-      }
-    } catch {
       const text = await response.text();
       if (text) {
-        message = text;
+        try {
+          const body = JSON.parse(text);
+          if (typeof body.detail === 'string') {
+            message = body.detail;
+          } else if (Array.isArray(body.detail)) {
+            message = (body.detail as Array<{ msg?: string }>).map(e => e.msg || JSON.stringify(e)).join('; ');
+          } else if (body.detail) {
+            message = JSON.stringify(body.detail);
+          } else {
+            message = text;
+          }
+        } catch {
+          message = text;
+        }
       }
-    }
+    } catch { /* body not readable */ }
     const error = new Error(message) as Error & { status?: number; detail?: unknown };
     error.status = response.status;
     try { error.detail = JSON.parse(message); } catch { /* message is plain string */ }
@@ -477,7 +476,7 @@ export async function refreshSession(refreshToken: string) {
 }
 
 export async function getMe(accessToken?: string | null) {
-  return fetchJson<{ actor: { role: string; operator_id: string; client_scope_id?: number | null; auth_mode: string; session_id?: number | null; username?: string | null; permissions: string[] }; user: AuthUser | null }>('/auth/me', { accessToken });
+  return fetchJson<{ actor: { role: string; operator_id: string; auth_mode: string; session_id?: number | null; username?: string | null; permissions: string[] }; user: AuthUser | null }>('/auth/me', { accessToken });
 }
 
 export async function logout(accessToken?: string | null) {
@@ -626,11 +625,11 @@ export async function listAuthUsers(accessToken?: string | null) {
   return fetchJson<AuthUser[]>('/auth/users', { accessToken });
 }
 
-export async function createAuthUser(data: { username: string; password: string; role: string; display_name?: string | null; client_scope_id?: number | null; is_active?: boolean }) {
+export async function createAuthUser(data: { username: string; password: string; role: string; display_name?: string | null; is_active?: boolean }) {
   return fetchJson<AuthUser>('/auth/users', { method: 'POST', body: JSON.stringify(data) });
 }
 
-export async function updateAuthUser(userId: number, data: { role?: string | null; display_name?: string | null; client_scope_id?: number | null; is_active?: boolean | null }) {
+export async function updateAuthUser(userId: number, data: { role?: string | null; display_name?: string | null; is_active?: boolean | null }) {
   return fetchJson<AuthUser>(`/auth/users/${userId}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 

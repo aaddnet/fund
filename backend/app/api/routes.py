@@ -92,7 +92,6 @@ def auth_me(db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
         "actor": {
             "role": actor.role,
             "operator_id": actor.operator_id,
-            "client_scope_id": actor.client_scope_id,
             "auth_mode": actor.auth_mode,
             "session_id": actor.session_id,
             "username": actor.username,
@@ -125,7 +124,6 @@ def create_user(req: AuthUserCreateRequest, db: Session = Depends(get_db), actor
         username=req.username,
         password=req.password,
         role=req.role,
-        client_scope_id=req.client_scope_id,
         display_name=req.display_name,
         is_active=req.is_active,
     )
@@ -139,7 +137,6 @@ def update_user(user_id: int, req: AuthUserUpdateRequest, db: Session = Depends(
         db,
         user_id=user_id,
         role=req.role,
-        client_scope_id=req.client_scope_id,
         display_name=req.display_name,
         is_active=req.is_active,
     )
@@ -1350,7 +1347,6 @@ def _serialize_auth_user(item: Optional[AuthUser]) -> Optional[dict]:
         "username": item.username,
         "role": item.role,
         "permissions": list(permissions_for_role(item.role)),
-        "client_scope_id": item.client_scope_id,
         "display_name": item.display_name,
         "is_active": item.is_active,
         "last_login_at": _iso(item.last_login_at),

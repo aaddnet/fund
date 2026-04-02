@@ -75,7 +75,7 @@ class Transaction(Base, TimestampMixin):
     tx_type = Column(String(50), nullable=False)
     tx_category = Column(String(30))
     source = Column(String(30), default="manual")
-    batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
+    import_batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
     description = Column(Text, nullable=True)
     realized_pnl = Column(Numeric(24, 8), nullable=True)
     settle_date = Column(Date, nullable=True)
@@ -87,7 +87,7 @@ class Transaction(Base, TimestampMixin):
     other_fee = Column(Numeric(24, 8), nullable=True)
     # Asset metadata
     isin = Column(String(20), nullable=True)
-    exchange = Column(String(10), nullable=True)
+    exchange = Column(String(20), nullable=True)
     close_price = Column(Numeric(24, 8), nullable=True)
     cost_basis = Column(Numeric(24, 8), nullable=True)
     # Option fields
@@ -122,14 +122,18 @@ class Transaction(Base, TimestampMixin):
 class Position(Base, TimestampMixin):
     __tablename__ = "position"
     __table_args__ = (
-        UniqueConstraint("account_id", "asset_code", "snapshot_date", name="uq_position_account_asset_date"),
+        UniqueConstraint("account_id", "asset_code", "snapshot_date", name="uq_position_account_asset_snapshot"),
     )
     id = Column(Integer, primary_key=True)
     account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
     asset_code = Column(String(50), nullable=False)
     quantity = Column(Numeric(24, 8), nullable=False)
     average_cost = Column(Numeric(24, 8))
+    currency = Column(String(10), nullable=False)
     snapshot_date = Column(Date, nullable=False)
+    source_batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
+    is_checkpoint = Column(Boolean, default=True)
+    checkpoint_tx_id = Column(Integer, nullable=True)
 
 
 class CashPosition(Base, TimestampMixin):
@@ -157,10 +161,18 @@ class ImportBatch(Base, TimestampMixin):
     row_count = Column(Integer, nullable=False, default=0)
     parsed_count = Column(Integer, nullable=False, default=0)
     confirmed_count = Column(Integer, nullable=False, default=0)
-    parsed_data = Column(Text)
+    preview_json = Column(Text, nullable=False, default="[]")
     failed_reason = Column(Text)
-    overlap_info = Column(Text)
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
     pending_deposits = Column(Text)
+
+    @property
+    def preview_rows(self):
+        return json.loads(self.preview_json) if self.preview_json else []
+
+    @property
+    def pending_deposit_rows(self):
+        return json.loads(self.pending_deposits) if self.pending_deposits else []
 
 
 # ── Pricing & FX ──────────────────────────────────────────────────────────
@@ -177,13 +189,13 @@ class AssetPrice(Base, TimestampMixin):
 
 class ExchangeRate(Base, TimestampMixin):
     __tablename__ = "exchange_rate"
-    __table_args__ = (UniqueConstraint("base_currency", "quote_currency", "rate_date", name="uq_exchange_rate_pair_date"),)
+    __table_args__ = (UniqueConstraint("base_currency", "quote_currency", "snapshot_date"),)
     id = Column(Integer, primary_key=True)
     base_currency = Column(String(10), nullable=False)
     quote_currency = Column(String(10), nullable=False)
-    rate = Column(Numeric(18, 8), nullable=False)
-    rate_date = Column(Date, nullable=False)
-    source = Column(String(20), nullable=False, default="manual")
+    rate = Column(Numeric(20, 8), nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    source = Column(String(50))
 
 
 # ── Portfolio Snapshots (was NAV) ─────────────────────────────────────────

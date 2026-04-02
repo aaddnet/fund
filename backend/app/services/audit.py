@@ -21,7 +21,6 @@ def record_audit(
     row = AuditLog(
         actor_role=actor.role,
         actor_id=actor.operator_id,
-        client_scope_id=actor.client_scope_id,
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -39,7 +38,6 @@ def serialize_audit(row: AuditLog) -> dict[str, Any]:
         "id": row.id,
         "actor_role": row.actor_role,
         "actor_id": row.actor_id,
-        "client_scope_id": row.client_scope_id,
         "action": row.action,
         "entity_type": row.entity_type,
         "entity_id": row.entity_id,
@@ -54,12 +52,9 @@ def list_audit_logs(
     db: Session,
     limit: int = 100,
     action: Optional[str] = None,
-    client_scope_id: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     query = db.query(AuditLog)
     if action:
         query = query.filter(AuditLog.action == action)
-    if client_scope_id is not None:
-        query = query.filter(AuditLog.client_scope_id == client_scope_id)
     rows = query.order_by(AuditLog.id.desc()).limit(limit).all()
     return [serialize_audit(row) for row in rows]

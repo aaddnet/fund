@@ -28,7 +28,7 @@ export default function Page({ health, db, nav, transactions, accounts, position
 
   const navTrendData = nav.slice(0, 10).reverse().map(item => ({
     label: item.nav_date,
-    value: item.nav_per_share
+    value: item.total_assets_usd
   }));
 
   return (
@@ -51,7 +51,7 @@ export default function Page({ health, db, nav, transactions, accounts, position
       <div style={styles.grid3}>
         <StatCard label={t('apiHealth')} value={health.toUpperCase()} tone={health === 'ok' ? 'success' : 'warning'} />
         <StatCard label={t('database')} value={db.toUpperCase()} tone={db === 'ok' ? 'success' : 'warning'} />
-        <StatCard label={t('latestNav')} value={latestNav ? formatNumber(latestNav.nav_per_share) : t('notAvailable')} hint={latestNav ? latestNav.nav_date : t('noNavRecords')} />
+        <StatCard label={t('latestNav')} value={latestNav ? formatNumber(latestNav.total_assets_usd) : t('notAvailable')} hint={latestNav ? latestNav.nav_date : t('noNavRecords')} />
       </div>
 
       <div style={{ ...styles.grid3, marginTop: 16 }}>
@@ -72,8 +72,7 @@ export default function Page({ health, db, nav, transactions, accounts, position
             rows={nav.slice(0, 5)}
             columns={[
               { key: 'date', title: t('date'), render: (item) => item.nav_date },
-              { key: 'nav', title: 'NAV / Share', render: (item) => formatNumber(item.nav_per_share) },
-              { key: 'assets', title: 'Assets USD', render: (item) => formatNumber(item.total_assets_usd) },
+              { key: 'assets', title: 'Total Assets (USD)', render: (item) => `$${formatNumber(item.total_assets_usd)}` },
             ]}
           />
         </div>

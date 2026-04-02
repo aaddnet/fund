@@ -28,27 +28,26 @@ export default function Layout({ title, children, subtitle, requiredPermission }
 
   const navGroups: NavGroup[] = [
     {
-      label: locale === 'zh' ? '投资组合' : 'Portfolio',
+      label: locale === 'zh' ? '总览' : 'Overview',
       items: [
-        { href: '/', label: t('overview') },
-        { href: '/dashboard', label: t('dashboard'), requiredPermission: 'dashboard.read' },
-        { href: '/accounts', label: t('accounts'), requiredPermission: 'accounts.read' },
+        { href: '/dashboard', label: locale === 'zh' ? '仪表盘' : 'Dashboard', requiredPermission: 'dashboard.read' },
+        { href: '/accounts', label: locale === 'zh' ? '账户' : 'Accounts', requiredPermission: 'accounts.read' },
         { href: '/nav', label: locale === 'zh' ? '组合价值' : 'Portfolio Value', requiredPermission: 'nav.read' },
       ],
     },
     {
       label: locale === 'zh' ? '数据管理' : 'Data',
       items: [
-        { href: '/transactions', label: locale === 'zh' ? '交易管理' : 'Transactions', requiredPermission: 'accounts.read' },
-        { href: '/import', label: t('import'), requiredPermission: 'import.read' },
-        { href: '/cash', label: t('cash'), requiredPermission: 'nav.read' },
+        { href: '/transactions', label: locale === 'zh' ? '交易记录' : 'Transactions', requiredPermission: 'accounts.read' },
+        { href: '/import', label: locale === 'zh' ? 'CSV导入' : 'CSV Import', requiredPermission: 'import.read' },
+        { href: '/cash', label: locale === 'zh' ? '现金账本' : 'Cash Ledger', requiredPermission: 'nav.read' },
       ],
     },
     {
       label: locale === 'zh' ? '系统' : 'System',
       items: [
-        { href: '/reports', label: t('reports'), requiredPermission: 'reports.read' },
-        { href: '/settings', label: t('settings'), requiredPermission: 'nav.read' },
+        { href: '/reports', label: locale === 'zh' ? '报表' : 'Reports', requiredPermission: 'reports.read' },
+        { href: '/settings', label: locale === 'zh' ? '设置' : 'Settings' },
       ],
     },
   ];

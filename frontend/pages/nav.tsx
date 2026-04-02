@@ -85,9 +85,7 @@ export default function Page({ nav, error }: Props) {
               rows={rows}
               columns={[
                 { key: 'date', title: t('date'), render: (item) => item.nav_date },
-                { key: 'assets', title: 'Assets USD', render: (item) => item.total_assets_usd === 0 ? '— (no positions)' : formatNumber(item.total_assets_usd) },
-                { key: 'shares', title: t('sharesLabel'), render: (item) => formatNumber(item.total_shares, 8) },
-                { key: 'nav', title: 'NAV / Share', render: (item) => item.nav_per_share === 0 ? '— (no positions)' : formatNumber(item.nav_per_share) },
+                { key: 'assets', title: 'Total Assets (USD)', render: (item) => item.total_assets_usd === 0 ? '— (no positions)' : `$${formatNumber(item.total_assets_usd)}` },
                 { key: 'locked', title: t('locked'), render: (item) => (item.is_locked ? t('yes') : t('no')) },
                 ...(canWriteNav ? [{
                   key: 'del', title: '', render: (item: NavRecord) => (

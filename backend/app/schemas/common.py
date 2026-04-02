@@ -180,7 +180,6 @@ class AuthUserCreateRequest(BaseModel):
     username: str
     password: str
     role: str
-    client_scope_id: Optional[int] = None
     display_name: Optional[str] = None
     is_active: bool = True
 
@@ -194,7 +193,6 @@ class AuthPasswordResetRequest(BaseModel):
 class AuthUserUpdateRequest(BaseModel):
     display_name: Optional[str] = None
     role: Optional[str] = None
-    client_scope_id: Optional[int] = None
     is_active: Optional[bool] = None
 
 
