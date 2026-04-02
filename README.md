@@ -1,182 +1,150 @@
-# Invest / Fund Management System
+# Fund - Investment Portfolio Tracker
 
-当前仓库已从 `Internal Test Ready` 继续推进到更工程化的本地可联调状态，重点补强了：
+Self-hosted investment portfolio tracker with multi-broker CSV import, multi-currency support, and automated portfolio valuation.
 
-- 更正式的 token/session 鉴权
-- Alembic 数据库迁移
-- Docker 本地一键联调
-- 关键 API / parser 回归测试
-- P2 报表增强：分组汇总、趋势视图、导出
-- P2 CI 基础：GitHub Actions + 本地统一检查脚本
-- P2 监控基础：liveness/readiness/metrics hooks
+## Features
 
-## Quick start
+- **Multi-Broker Import** - Parse and import CSV/statements from Interactive Brokers, Futu/Moomoo, Charles Schwab, Kraken
+- **Multi-Currency** - Track positions and cash across USD, HKD, CNH, EUR, GBP with FX rate management
+- **Portfolio Valuation** - Calculate total portfolio value (NAV) with asset price lookups and FX conversion
+- **Cash Ledger** - Automatic cash balance tracking derived from transactions (deposits, withdrawals, dividends, interest, fees)
+- **Transaction Management** - Full CRUD for trades, dividends, fees, FX, corporate actions with fee decomposition
+- **Bilingual UI** - Chinese and English interface
+- **Role-Based Access** - Admin (full access) and Readonly roles with session-based auth
 
-### 1. 一键启动本地联调
+## Tech Stack
 
-```bash
-./start-local.sh
-```
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js 14 (TypeScript, SSR) |
+| Backend | FastAPI (Python 3.12, SQLAlchemy 2.x) |
+| Database | PostgreSQL 16 |
+| Migration | Alembic |
+| Deploy | Docker Compose |
 
-默认会启动：
+## Quick Start
 
-- PostgreSQL
-- FastAPI backend
-- Next.js frontend
-
-端口：
-
-- Frontend: <http://127.0.0.1:3000>
-- Backend: <http://127.0.0.1:8000>
-
-### 2. 登录获取 token
-
-系统会自动 bootstrap 本地测试用户（全新数据库初始化时）：
-
-- `admin / Admin12345`
-- `ops / Ops1234567`
-- `client1 / Client12345`
-- `ops.viewer / Viewer12345`
-
-> 注意：如果你使用的是旧数据库卷，历史 seed 用户密码可能不会被自动覆盖，需以当前库里实际账号状态为准。
-
-示例：
+### Docker (Recommended)
 
 ```bash
-curl -X POST http://127.0.0.1:8000/auth/login \
-  -F 'username=ops' \
-  -F 'password=ops123'
+# Clone and start
+git clone https://github.com/aaddnet/fund.git
+cd fund
+
+# Start all services
+docker compose -f docker-compose.local.yml up -d
+
+# Access
+# Frontend: http://127.0.0.1:3000
+# Backend:  http://127.0.0.1:8000
 ```
 
-然后用返回的 `access_token` 调用接口：
+Default admin credentials: `admin / Admin12345`
 
-```bash
-curl http://127.0.0.1:8000/auth/me \
-  -H "Authorization: Bearer <token>"
-```
+### Environment Variables
 
-## Reports (P2)
-
-报表页已支持：
-
-- 月 / 季 / 年筛选
-- 基金 / 客户 / 份额交易类型筛选
-- 按基金、客户、交易类型聚合的份额流汇总
-- 按日期的净流入趋势条形图
-- 按基金的最新 NAV 摘要
-- 交易资产分布摘要
-- 前端导出 JSON / CSV
-
-核心接口：
-
-```bash
-curl "http://127.0.0.1:8000/reports/overview?period_type=quarter&period_value=2026-Q2&tx_type=subscribe" \
-  -H "Authorization: Bearer <token>"
-```
-
-## Monitoring hooks (P2)
-
-轻量级 observability / alert-ready hooks：
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/health/live
-curl http://127.0.0.1:8000/health/ready
-curl http://127.0.0.1:8000/metrics
-curl http://127.0.0.1:8000/metrics/json
-```
-
-说明：
-
-- `/health/live`：进程存活探针
-- `/health/ready`：数据库 ready 探针
-- `/metrics`：Prometheus 文本格式，便于后续接 Grafana / Alertmanager
-- `/metrics/json`：便于本地排查的 JSON 快照
-- 所有请求会记录简单 in-memory 路由计数、5xx 数、平均耗时
-
-## Auth modes
-
-通过环境变量控制：
-
-- `AUTH_MODE=token`：只允许 Bearer token
-- `AUTH_MODE=hybrid`：优先 Bearer token，允许保留 dev fallback
-- `AUTH_MODE=dev`：旧的开发头模式
-
-推荐本地联调使用：
+Copy `.env.example` to `.env.local` and customize:
 
 ```env
-AUTH_MODE=hybrid
-AUTH_ALLOW_DEV_FALLBACK=true
+DATABASE_URL=postgresql://fund_user:fund_pass@db:5432/fund_system
+AUTH_SECRET_KEY=change-me-to-a-random-64-char-secret
+AUTH_ENABLED=true
+AUTH_BOOTSTRAP_USERS_JSON=[{"username":"admin","password":"YourStrongPassword123","role":"admin"}]
 ```
 
-更接近正式测试可改为：
+## Architecture
 
-```env
-AUTH_MODE=token
-AUTH_ALLOW_DEV_FALLBACK=false
+```
+Browser ──3000──▶ Frontend (Next.js SSR)
+                      │
+                      │ INTERNAL_API_BASE
+                      ▼
+                  Backend (FastAPI)
+                      │
+                      │ DATABASE_URL
+                      ▼
+                  PostgreSQL 16
 ```
 
-## Database migrations
+## Data Model
 
-后端启动时会自动执行：
+| Table | Purpose |
+|-------|---------|
+| `account` | Brokerage accounts (broker, account_no, holder) |
+| `transaction` | All trades, cash movements, dividends, fees, FX |
+| `position` | Asset position snapshots per account |
+| `cash_position` | Cash balance snapshots per currency |
+| `import_batch` | CSV import tracking with preview and confirmation |
+| `asset_price` | Asset prices for NAV calculation |
+| `exchange_rate` | FX rates for multi-currency conversion |
+| `nav_record` | Portfolio valuation snapshots |
+| `asset_snapshot` | Per-asset valuation details within NAV |
+| `auth_user` | User accounts with role-based permissions |
+| `auth_session` | Session tokens for authentication |
+| `audit_log` | Action audit trail |
 
-```bash
-alembic upgrade head
-```
+## API Overview
 
-也可手动执行：
+| Group | Endpoints | Description |
+|-------|-----------|-------------|
+| Auth | `POST /auth/login`, `/auth/me`, `/auth/users` | Login, session management, user CRUD |
+| Accounts | `GET/POST /account` | Brokerage account management |
+| Transactions | `GET/POST/PATCH/DELETE /transaction` | Trade and cash movement CRUD |
+| Import | `POST /import/upload`, `/import/{id}/confirm` | CSV upload, preview, and confirmation |
+| Cash | `GET /cash/balance`, `/cash/flow` | Cash balances and flow history |
+| NAV | `POST /nav/calc`, `GET /nav` | Portfolio valuation calculation |
+| Prices | `GET/POST /price` | Asset price management |
+| Rates | `GET/POST /rates` | FX rate management |
+| Reports | `GET /reports/overview`, `/reports/export` | Portfolio reports and CSV export |
+
+## Supported Brokers
+
+| Broker | Format | Features |
+|--------|--------|----------|
+| Interactive Brokers | Activity Statement (CSV) | Trades, dividends, interest, fees, FX, transfers |
+| Futu / Moomoo | Trade CSV (Chinese headers) | Trades with partial-fill merging, fee decomposition |
+| Charles Schwab | Transaction CSV | Trades, dividends, transfers |
+| Kraken | Trade/Ledger CSV | Crypto trades |
+
+## Pages
+
+| Page | Path | Description |
+|------|------|-------------|
+| Dashboard | `/dashboard` | System health, NAV trend, recent activity |
+| Accounts | `/accounts` | Account list with broker filter |
+| Portfolio Value | `/nav` | NAV calculation and history |
+| Transactions | `/transactions` | Transaction list with filters |
+| CSV Import | `/import` | Upload, preview, and confirm CSV imports |
+| Cash Ledger | `/cash` | Cash balance summary and flow history |
+| Reports | `/reports` | Portfolio overview reports |
+| Settings | `/settings` | User management, FX rates, asset prices |
+
+## Development
+
+### Backend
 
 ```bash
 cd backend
-DATABASE_URL='postgresql+psycopg2://fund_user:fund_pass@127.0.0.1:5432/fund_system' alembic upgrade head
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 ```
 
-## Smoke test
-
-本地栈启动后执行：
+### Frontend
 
 ```bash
-./smoke-test.sh
+cd frontend
+npm install
+npm run dev
 ```
 
-会验证：
-
-- health / db health
-- auth login / auth me
-- import upload / confirm
-- nav calc
-- share subscribe / redeem
-- fee calc
-- scheduler / audit
-- client readonly scope boundary
-- frontend 首页可访问
-
-## Tests / CI
-
-本地统一检查：
+### Database Migration
 
 ```bash
-bash scripts/ci-check.sh
+cd backend
+alembic upgrade head
 ```
 
-分别执行：
+## License
 
-```bash
-cd backend && pytest
-cd frontend && npm run build
-```
-
-仓库已包含 `.github/workflows/ci.yml`，可直接作为后续 PR / push 自动检查骨架。
-
-## Docker compose
-
-如果你想直接操作 Docker：
-
-```bash
-docker compose -f docker-compose.local.yml up --build
-```
-
-## Notes
-
-- 当前 auth 已经比纯 dev header 正式很多，但仍是适合现阶段 scaffold 的轻量实现，不是完整企业级 IAM。
-- 这段代码可以优化，后续可以继续补真正的告警投递、持久化 metrics、前端更正式的图表组件和更细粒度的导出模板。
+MIT

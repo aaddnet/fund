@@ -33,8 +33,7 @@ services:
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-change-me-invest-dev-secret}
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
       SCHEDULER_FX_PAIRS: ${SCHEDULER_FX_PAIRS:-HKD:USD,SGD:USD,CNY:USD,EUR:USD,GBP:USD}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3-vl:8b}
+      AUTH_BOOTSTRAP_USERS_JSON: ${AUTH_BOOTSTRAP_USERS_JSON:-[{"username":"admin","password":"Admin12345","role":"admin"}]}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
