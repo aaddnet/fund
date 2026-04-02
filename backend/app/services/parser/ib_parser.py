@@ -70,11 +70,47 @@ _ZH_TX_TYPE_MAP = {
     # Deposit / capital events — flagged for manual confirmation
     "存款": "deposit_pending",
     "电子资金转账": "deposit_pending",
-    # Ignored (non-cash P&L translation entries)
-    "FX Translations P&L": "ignore",
+    # V4.1: Internal transfers
+    "内部转账": "transfer",
+    "转账": "transfer",
+    # V4.1: Dividend-related
+    "代付股息": "pil",          # Payment in Lieu of Dividend
+    "股息费用": "dividend_fee",  # IB -FEE rows associated with dividends
+    "股利费用": "dividend_fee",
+    # V4.1: ADR fees
+    "存托凭证费": "adr_fee",
+    "存托费": "adr_fee",
+    # V4.1: Securities lending
+    "证券出借": "lending_out",
+    "证券归还": "lending_return",
+    "出借收入": "lending_income",
+    # V4.1: Accruals
+    "利息应计": "interest_accrual",
+    "股息应计": "dividend_accrual",
+    "利息应计冲销": "interest_accrual_reversal",
+    "股息应计冲销": "dividend_accrual_reversal",
+    # V4.1: FX translation — stored (previously ignored)
+    "FX Translations P&L": "fx_translation",
 }
 # Legacy set kept for backward compat (no longer used in routing)
 _ZH_CASH_TYPES: set[str] = set()
+
+# V4.1: EN description keyword → tx_type mapping (used when 交易类型 is missing/unknown)
+# Checked against description.lower(); first match wins
+_EN_DESCRIPTION_KEYWORDS: dict[str, str] = {
+    "internal transfer": "transfer",
+    "payment in lieu": "pil",
+    " -fee": "dividend_fee",                   # IB dividend -FEE rows (note leading space)
+    "adr management fee": "adr_fee",
+    "adr fee": "adr_fee",
+    "interest on customer collateral": "lending_income",
+    "securities lent": "lending_out",
+    "securities returned": "lending_return",
+    "interest accrual": "interest_accrual",
+    "dividend accrual": "dividend_accrual",
+    "accrual reversal": "interest_accrual_reversal",
+    "fx translation": "fx_translation",
+}
 
 # Flex Query: IB column name (lowered) → standard column name
 _IB_FLEX_COL_MAP = {
@@ -241,7 +277,7 @@ def _emit_zh_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
     """Write standardised output CSV from ZH Activity Statement rows."""
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["trade_date", "asset_code", "quantity", "price", "currency", "fee", "tx_type"])
+    writer.writerow(["trade_date", "asset_code", "quantity", "price", "currency", "fee", "tx_type", "description", "tx_subtype"])
 
     for row in data_rows:
         def _get(col: str) -> str:
@@ -261,10 +297,6 @@ def _emit_zh_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
         # Determine tx_type from 交易类型
         tx_type_zh = _get("tx_type_zh").strip()
         tx_type = _ZH_TX_TYPE_MAP.get(tx_type_zh, "")
-
-        # Skip explicitly ignored types (FX P&L translation entries)
-        if tx_type == "ignore":
-            continue
 
         # Parse raw numeric fields (keep sign for now)
         qty_raw = _get("quantity").replace(",", "")
@@ -328,15 +360,34 @@ def _emit_zh_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
         if not tx_type:
             desc_lower = description.lower() if description else ""
             sign_val = net_signed or total_signed or qty
-            is_cash_adj = any(kw in desc_lower for kw in ("p&l", "dividend", "interest", "adjustment", "withholding"))
-            is_fx = (tx_type_zh in ("转换", "外汇") and ("." in asset_code or "/" in asset_code or len(asset_code) == 6)) or \
-                    (not is_cash_adj and any(kw in desc_lower for kw in ("forex", "conversion")))
-            if is_cash_adj:
-                tx_type = "cash_in" if sign_val > 0 else "cash_out"
-            elif is_fx:
-                tx_type = "forex_buy" if sign_val > 0 else "forex_sell"
-            else:
-                tx_type = "sell" if (net_signed or total_signed) < 0 else "buy"
+            # V4.1: check EN description keywords first (IB mixes EN in ZH exports)
+            en_matched = False
+            for kw, mapped in _EN_DESCRIPTION_KEYWORDS.items():
+                if kw in desc_lower:
+                    tx_type = mapped
+                    en_matched = True
+                    break
+            if not en_matched:
+                is_cash_adj = any(kw in desc_lower for kw in ("p&l", "dividend", "interest", "adjustment", "withholding"))
+                is_fx = (tx_type_zh in ("转换", "外汇") and ("." in asset_code or "/" in asset_code or len(asset_code) == 6)) or \
+                        (not is_cash_adj and any(kw in desc_lower for kw in ("forex", "conversion")))
+                if is_cash_adj:
+                    tx_type = "cash_in" if sign_val > 0 else "cash_out"
+                elif is_fx:
+                    tx_type = "forex_buy" if sign_val > 0 else "forex_sell"
+                else:
+                    tx_type = "sell" if (net_signed or total_signed) < 0 else "buy"
+
+        # Compute tx_subtype from tx_type_zh
+        tx_subtype = ""
+        if tx_type_zh == "电子资金转账":
+            tx_subtype = "eft"
+        elif tx_type_zh in ("内部转账", "转账") or tx_type == "transfer":
+            tx_subtype = "transfer"
+        elif tx_type_zh == "股息":
+            tx_subtype = "ordinary"
+        elif tx_type_zh == "替代支付":
+            tx_subtype = "special"
 
         # Derive asset_code from description if 代码 is empty
         if not asset_code and description:
@@ -353,6 +404,8 @@ def _emit_zh_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
             currency,
             str(fee),
             tx_type,
+            description or "",
+            tx_subtype,
         ])
 
     return out.getvalue().encode("utf-8")
@@ -362,7 +415,7 @@ def _emit_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
     """Write standardised output CSV from parsed data rows."""
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["trade_date", "asset_code", "quantity", "price", "currency", "fee", "tx_type"])
+    writer.writerow(["trade_date", "asset_code", "quantity", "price", "currency", "fee", "tx_type", "description", "tx_subtype"])
 
     for row in data_rows:
         def _get(col: str) -> str:
@@ -388,6 +441,8 @@ def _emit_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
         if qty == 0:
             continue
 
+        description = _get("description") if "description" in col_idx else ""
+
         # Determine tx_type from explicit column or quantity sign
         explicit_type = _get("tx_type").strip().lower()
         if is_forex:
@@ -399,7 +454,16 @@ def _emit_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
         elif explicit_type in ("sell", "buy/sell:sell"):
             tx_type = "sell"
         else:
-            tx_type = "sell" if qty < 0 else "buy"
+            # V4.1: check description for EN keywords before defaulting to buy/sell
+            desc_lower = description.lower()
+            en_matched = False
+            for kw, mapped in _EN_DESCRIPTION_KEYWORDS.items():
+                if kw in desc_lower:
+                    tx_type = mapped
+                    en_matched = True
+                    break
+            if not en_matched:
+                tx_type = "sell" if qty < 0 else "buy"
 
         price_raw = _get("price").replace(",", "") if "price" in col_idx else "0"
         try:
@@ -421,6 +485,8 @@ def _emit_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
             _get("currency") or "USD",
             fee,
             tx_type,
+            description,
+            "",   # tx_subtype not available from EN format
         ])
 
     return out.getvalue().encode("utf-8")

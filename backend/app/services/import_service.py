@@ -50,6 +50,16 @@ COLUMN_ALIASES = {
     "as_of": "snapshot_date",
     "position_date": "snapshot_date",
     "snapshot_date": "snapshot_date",
+    # V4.1: optional extended columns
+    "description": "description",
+    "tx_subtype": "tx_subtype",
+    "gross_amount": "gross_amount",
+    "commission_amount": "commission",
+    "transaction_fee": "transaction_fee",
+    "other_fee": "other_fee",
+    "isin": "isin",
+    "exchange": "exchange",
+    "counterparty_account": "counterparty_account",
 }
 BUY_TX_TYPES = {"buy", "b", "subscribe", "sub"}
 SELL_TX_TYPES = {"sell", "s", "redeem", "redemption", "withdrawal"}
@@ -57,6 +67,21 @@ SELL_TX_TYPES = {"sell", "s", "redeem", "redemption", "withdrawal"}
 FOREX_CASH_TX_TYPES = {"forex_buy", "forex_sell", "cash_in", "cash_out"}
 # Deposit rows flagged for manual capital-event confirmation (never auto-create Position)
 DEPOSIT_PENDING_TX_TYPE = "deposit_pending"
+
+# V4.1: Extended category sets
+_ACCRUAL_TX_TYPES = {
+    "interest_accrual", "interest_accrual_reversal",
+    "dividend_accrual", "dividend_accrual_reversal",
+}
+_SECURITIES_LENDING_TX_TYPES = {"lending_out", "lending_return"}
+_CASH_TX_TYPES = {
+    "cash_in", "cash_out", "deposit", "withdrawal",
+    "dividend", "dividend_tax", "interest_credit", "interest_debit",
+    "fee", "adjustment", "margin_interest", "margin_adjustment",
+    # V4.1 additions
+    "transfer", "pil", "dividend_fee", "adr_fee", "other_fee",
+    "lending_income",
+}
 
 # Map import source name → platform-specific preprocessor
 _PREPROCESSORS = {
@@ -178,29 +203,49 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
 
     for item in trade_rows:
         tx_type_lower = (item["tx_type"] or "").lower()
-        # Determine category: FX trades vs regular equity vs cash flows
-        if tx_type_lower in ("forex_buy", "forex_sell"):
+        # V4.1: Extended category routing
+        if tx_type_lower in ("forex_buy", "forex_sell", "fx_translation"):
             tx_category = "FX"
-        elif tx_type_lower in ("cash_in", "cash_out", "deposit", "withdrawal",
-                               "dividend", "interest_credit", "interest_debit",
-                               "fee", "adjustment"):
+        elif tx_type_lower in _ACCRUAL_TX_TYPES:
+            tx_category = "ACCRUAL"
+        elif tx_type_lower in _SECURITIES_LENDING_TX_TYPES:
+            tx_category = "SECURITIES_LENDING"
+        elif tx_type_lower in _CASH_TX_TYPES:
             tx_category = "CASH"
         else:
             tx_category = "EQUITY"
+
+        def _opt_decimal(val: Any) -> Optional[Decimal]:
+            if val is None or val == "":
+                return None
+            try:
+                return Decimal(str(val))
+            except Exception:
+                return None
 
         db.add(
             Transaction(
                 account_id=batch.account_id,
                 trade_date=_parse_date_value(item["trade_date"]),
-                asset_code=item["asset_code"],
-                quantity=Decimal(str(item["quantity"])),
-                price=Decimal(str(item["price"])),
+                asset_code=item.get("asset_code") or None,
+                quantity=_opt_decimal(item.get("quantity")),
+                price=_opt_decimal(item.get("price")),
                 currency=item["currency"],
                 tx_type=item["tx_type"],
                 fee=Decimal(str(item.get("fee", "0"))),
                 import_batch_id=batch.id,
                 tx_category=tx_category,
                 source="csv_import",
+                # V4.1: extended fields from parser output
+                tx_subtype=item.get("tx_subtype") or None,
+                description=item.get("description") or None,
+                amount=_opt_decimal(item.get("gross_amount")),
+                commission=_opt_decimal(item.get("commission")),
+                transaction_fee=_opt_decimal(item.get("transaction_fee")),
+                other_fee=_opt_decimal(item.get("other_fee")),
+                isin=item.get("isin") or None,
+                exchange=item.get("exchange") or None,
+                counterparty_account=item.get("counterparty_account") or None,
             )
         )
 
@@ -335,13 +380,23 @@ def _parse_csv_rows(content: bytes) -> list[dict[str, Any]]:
             {
                 "row_number": index,
                 "trade_date": trade_date.isoformat(),
-                "asset_code": normalized["asset_code"].upper(),
+                "asset_code": normalized.get("asset_code", "").upper(),
                 "quantity": str(quantity),
                 "price": str(price),
                 "currency": (normalized.get("currency") or "USD").upper(),
                 "tx_type": tx_type,
                 "fee": str(fee),
                 "snapshot_date": _parse_date_value(snapshot_date).isoformat(),
+                # V4.1: optional extended fields (passed through if present)
+                "tx_subtype": normalized.get("tx_subtype") or "",
+                "description": normalized.get("description") or "",
+                "gross_amount": normalized.get("gross_amount") or "",
+                "commission": normalized.get("commission") or "",
+                "transaction_fee": normalized.get("transaction_fee") or "",
+                "other_fee": normalized.get("other_fee") or "",
+                "isin": normalized.get("isin") or "",
+                "exchange": normalized.get("exchange") or "",
+                "counterparty_account": normalized.get("counterparty_account") or "",
             }
         )
 
@@ -358,9 +413,15 @@ def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> lis
     position_state = defaultdict(lambda: {"quantity": Decimal("0"), "cost_basis": Decimal("0")})
     snapshots = {}
 
-    for item in sorted(preview_rows, key=lambda row: (row["snapshot_date"], row["trade_date"], row["row_number"], row["asset_code"])):
-        # Skip forex/cash/deposit rows — they don't create stock positions
-        if item["tx_type"] in FOREX_CASH_TX_TYPES or item["tx_type"] == DEPOSIT_PENDING_TX_TYPE:
+    for item in sorted(preview_rows, key=lambda row: (row["snapshot_date"], row["trade_date"], row["row_number"], row.get("asset_code", ""))):
+        # Skip forex/cash/deposit/accrual/lending rows — they don't create stock positions
+        tx_t = item["tx_type"]
+        if (tx_t in FOREX_CASH_TX_TYPES
+                or tx_t == DEPOSIT_PENDING_TX_TYPE
+                or tx_t in _CASH_TX_TYPES
+                or tx_t in _ACCRUAL_TX_TYPES
+                or tx_t in _SECURITIES_LENDING_TX_TYPES
+                or tx_t == "fx_translation"):
             continue
         position_key = (item["asset_code"], item["currency"])
         state = position_state[position_key]

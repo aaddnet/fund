@@ -129,16 +129,30 @@ TRADE_PROMPT = f"""
 - tx_type: 交易类型，从以下选择：
     股票/ETF: buy | sell
     期权: buy_option | sell_option | option_expire | option_exercise
-    现金: deposit | withdrawal | dividend | dividend_tax | interest_credit | interest_debit | fee | adjustment
-    换汇: fx_trade
+    现金-通用: deposit | withdrawal | dividend | dividend_tax | interest_credit | interest_debit | fee | adjustment
+    现金-V4.1: transfer | pil | dividend_fee | adr_fee | other_fee
+    换汇: fx_trade | fx_translation
+    证券借贷: lending_out | lending_return | lending_income
+    应计: interest_accrual | interest_accrual_reversal | dividend_accrual | dividend_accrual_reversal
     企业行动: stock_split | reverse_split | rights_issue | spinoff
-- asset_code: 资产代码（无则 null）
+- tx_subtype: 子类型（如 eft/transfer/ordinary/special），无则 null
+- asset_code: 资产代码（港股数字代码如 175/3690，美股如 AAPL/TSLA，无则 null）
+- isin: 国际证券识别码（如 KYG3777B1032），无则 null
+- exchange: 交易所代码（HK/US/CN），无则 null
 - quantity: 数量（买入正数，卖出负数，无则 null）
 - price: 成交单价（无则 null）
 - currency: 货币代码（如 USD / HKD / CNY）
-- amount: 金额（正=资金流入账户，负=资金流出账户，无则 null）
-- fee: 手续费（负数或0）
+- gross_amount: 税前成交金额（quantity × price，无则 null）
+- commission: 券商佣金（负数，如 -60.40，无则 null）
+- transaction_fee: 交易所监管费/印花税（负数，如 -34.89，无则 null）
+- other_fee: 其他费用如ADR费/股息费（负数，无则 null）
+- amount: 净现金影响（正=资金流入账户，负=资金流出账户，无则 null）
+- fee: 所有费用合计（负数或0，兼容旧格式）
 - description: 账单原始描述（原文保留）
+- counterparty_account: 内部转账对手账户（如 I164167），无则 null
+- accrual_type: 应计类型（interest_accrual/dividend_accrual），无则 null
+- accrual_period_start: 应计期间开始日期 YYYY-MM-DD，无则 null
+- accrual_period_end: 应计期间结束日期 YYYY-MM-DD，无则 null
 
 换汇交易额外字段（tx_type=fx_trade）：
 - fx_from_currency: 卖出货币（如 "USD"）
@@ -150,6 +164,12 @@ TRADE_PROMPT = f"""
 IBKR 换汇记录特征：
 - 说明栏包含 "Forex" 或 "USD.HKD" 格式
 - 两行对应一笔：卖出行（负数）+ 买入行（正数）→ 合并为一条 fx_trade 记录
+
+IBKR 多费用记录特征（V4.1）：
+- 港股交易通常有两笔费用：commission（佣金给券商）+ transaction_fee（印花税等给交易所）
+- 股息记录后的 -FEE 行 → tx_type=dividend_fee
+- ADR Fee 记录 → tx_type=adr_fee
+- Internal Transfer 记录 → tx_type=transfer，counterparty_account 填写对手账户号
 
 期权交易额外字段：
 - option_underlying: 标的代码（如 "NIO"）
@@ -166,13 +186,30 @@ IBKR 换汇记录特征：
     {{
       "date": "YYYY-MM-DD",
       "tx_type": "buy",
-      "asset_code": "AAPL",
-      "quantity": 100,
-      "price": 182.50,
+      "asset_code": "175",
+      "exchange": "HK",
+      "quantity": 1000,
+      "price": 14.70,
+      "currency": "HKD",
+      "gross_amount": -14700.00,
+      "commission": -60.40,
+      "transaction_fee": -34.89,
+      "other_fee": null,
+      "amount": -14795.29,
+      "fee": -95.29,
+      "description": "GEELY AUTOMOBILE 买入 1000股"
+    }},
+    {{
+      "date": "YYYY-MM-DD",
+      "tx_type": "dividend",
+      "tx_subtype": "ordinary",
+      "asset_code": "YRD",
       "currency": "USD",
-      "amount": -18250.00,
-      "fee": -1.00,
-      "description": "原始描述"
+      "gross_amount": 16.24,
+      "other_fee": -1.16,
+      "amount": 16.24,
+      "fee": -1.16,
+      "description": "YRD Cash Dividend 0.28 per Share"
     }}
   ]
 }}
@@ -830,13 +867,23 @@ def _write_trade_transactions(db, batch: PdfImportBatch, trades: list[dict]) -> 
     for t in trades:
         tx_type = str(t.get("tx_type") or t.get("side") or "buy").lower()
 
-        # Classify category
-        if tx_type == "fx_trade":
+        # Classify category (V4.1 extended)
+        if tx_type in ("fx_trade", "fx_translation"):
             tx_category = "FX"
+        elif tx_type in (
+            "interest_accrual", "interest_accrual_reversal",
+            "dividend_accrual", "dividend_accrual_reversal",
+        ):
+            tx_category = "ACCRUAL"
+        elif tx_type in ("lending_out", "lending_return"):
+            tx_category = "SECURITIES_LENDING"
         elif tx_type in (
             "deposit", "withdrawal", "dividend", "dividend_tax",
             "interest_credit", "interest_debit", "fee", "adjustment",
             "substitute_payment", "staking",
+            # V4.1
+            "transfer", "pil", "dividend_fee", "adr_fee", "other_fee",
+            "lending_income",
         ):
             tx_category = "CASH"
         elif tx_type in ("margin_interest", "margin_adjustment"):
@@ -876,7 +923,26 @@ def _write_trade_transactions(db, batch: PdfImportBatch, trades: list[dict]) -> 
         # FX fields
         fx_from_amt = Decimal(str(t["fx_from_amount"])) if t.get("fx_from_amount") is not None else None
         fx_to_amt = Decimal(str(t["fx_to_amount"])) if t.get("fx_to_amount") is not None else None
-        fx_rate = Decimal(str(t["fx_rate"])) if t.get("fx_rate") is not None else None
+        fx_rate_val = Decimal(str(t["fx_rate"])) if t.get("fx_rate") is not None else None
+
+        # V4.1: helper for optional decimals
+        def _to_decimal(v):
+            if v is None or v == "":
+                return None
+            try:
+                return Decimal(str(v))
+            except Exception:
+                return None
+
+        # V4.1: optional date parsing
+        def _parse_opt_date(v):
+            if not v:
+                return None
+            try:
+                from datetime import date as _dt
+                return _dt.fromisoformat(str(v)[:10])
+            except ValueError:
+                return None
 
         db.add(_Tx(
             account_id=batch.account_id,
@@ -895,13 +961,25 @@ def _write_trade_transactions(db, batch: PdfImportBatch, trades: list[dict]) -> 
             price=price,
             option_underlying=t.get("option_underlying"),
             option_expiry=option_expiry,
-            option_strike=Decimal(str(t["option_strike"])) if t.get("option_strike") is not None else None,
+            option_strike=_to_decimal(t.get("option_strike")),
             option_type=t.get("option_type"),
             option_multiplier=t.get("option_multiplier"),
             fx_from_currency=t.get("fx_from_currency"),
             fx_from_amount=fx_from_amt,
             fx_to_currency=t.get("fx_to_currency"),
             fx_to_amount=fx_to_amt,
-            fx_rate=fx_rate,
+            fx_rate=fx_rate_val,
             import_batch_id=batch.id,
+            # V4.1: extended fields
+            tx_subtype=t.get("tx_subtype") or None,
+            gross_amount=_to_decimal(t.get("gross_amount")),
+            commission=_to_decimal(t.get("commission")),
+            transaction_fee=_to_decimal(t.get("transaction_fee")),
+            other_fee=_to_decimal(t.get("other_fee")),
+            isin=t.get("isin") or None,
+            exchange=t.get("exchange") or None,
+            counterparty_account=t.get("counterparty_account") or None,
+            accrual_type=t.get("accrual_type") or None,
+            accrual_period_start=_parse_opt_date(t.get("accrual_period_start")),
+            accrual_period_end=_parse_opt_date(t.get("accrual_period_end")),
         ))

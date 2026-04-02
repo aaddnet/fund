@@ -128,6 +128,27 @@ def get_cash_impacts(tx: Transaction) -> list[CashImpact]:
                     delta=fee,
                     settle_date=settle,
                 ))
+        # fx_translation: period-end FX P&L adjustment — no cash movement
+        # else: pass
+
+    elif category == "SECURITIES_LENDING":
+        # lending_out / lending_return: no direct cash flow
+        # (collateral tracked separately in cash_collateral table)
+        # lending_income: interest received on collateral — IS a cash inflow
+        if tx_type == "lending_income":
+            amount = Decimal(str(tx.amount or 0))
+            net = amount + fee
+            if net != ZERO:
+                impacts.append(CashImpact(
+                    currency=tx.currency,
+                    delta=net,
+                    settle_date=settle,
+                ))
+
+    elif category == "ACCRUAL":
+        # Accruals affect NAV but do NOT move cash.
+        # NAV adjustment is computed separately via the Accrual table.
+        pass
 
     return impacts
 

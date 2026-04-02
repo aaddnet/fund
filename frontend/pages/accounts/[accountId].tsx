@@ -9,6 +9,7 @@ import {
   CashPosition,
   FXSummary,
   ImportBatch,
+  NavBreakdown,
   Position,
   Transaction,
   getAccount,
@@ -16,6 +17,7 @@ import {
   getCashPositions,
   getFxSummary,
   getImportBatches,
+  getNavBreakdown,
   getPrices,
   getPositions,
   getTransactions,
@@ -24,7 +26,7 @@ import { useI18n } from '../../lib/i18n';
 import { requirePageAuth } from '../../lib/pageAuth';
 import { colors, formatNumber, styles } from '../../lib/ui';
 
-type Tab = 'positions' | 'transactions' | 'imports' | 'cash' | 'fx';
+type Tab = 'positions' | 'transactions' | 'imports' | 'cash' | 'fx' | 'nav';
 
 type Props = {
   account: Account;
@@ -35,10 +37,11 @@ type Props = {
   cashBalances: CashBalances | null;
   fxSummary: FXSummary[];
   latestPrices: AssetPrice[];
+  navBreakdown: NavBreakdown | null;
   error?: string;
 };
 
-export default function Page({ account, positions, transactions, imports, cashPositions, cashBalances, fxSummary, latestPrices, error }: Props) {
+export default function Page({ account, positions, transactions, imports, cashPositions, cashBalances, fxSummary, latestPrices, navBreakdown, error }: Props) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('positions');
 
@@ -73,6 +76,7 @@ export default function Page({ account, positions, transactions, imports, cashPo
     { key: 'transactions', label: t('tabTransactions'), count: transactions.length },
     { key: 'cash', label: t('tabCash'), count: cashPositions.length },
     { key: 'fx', label: '换汇记录', count: fxTxns.length },
+    { key: 'nav', label: 'NAV', count: 0 },
     { key: 'imports', label: t('tabImports'), count: imports.length },
   ];
 
@@ -129,6 +133,8 @@ export default function Page({ account, positions, transactions, imports, cashPo
       FX: '#9333ea',
       MARGIN: '#b45309',
       CORPORATE: '#0f766e',
+      SECURITIES_LENDING: '#0369a1',
+      ACCRUAL: '#7c3aed',
     };
     return (
       <span style={{
@@ -159,6 +165,20 @@ export default function Page({ account, positions, transactions, imports, cashPo
               {t('fund')}: <strong>{account.fund_name || `#${account.fund_id}`}</strong>
               {account.holder_name && <> · {t('accountHolder')}: <strong>{account.holder_name}</strong></>}
               {' · '}ID: #{account.id}
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              {account.is_margin && (
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: '#b45309', color: '#fff' }}>保证金账户</span>
+              )}
+              {account.base_currency && account.base_currency !== 'USD' && (
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: '#0369a1', color: '#fff' }}>{account.base_currency}</span>
+              )}
+              {account.account_capabilities && (
+                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#f1f5f9', color: '#475569' }}>{account.account_capabilities}</span>
+              )}
+              {account.ib_account_no && (
+                <span style={{ fontSize: 11, color: colors.muted }}>IB: {account.ib_account_no}</span>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 20, fontSize: 13 }}>
@@ -418,6 +438,194 @@ export default function Page({ account, positions, transactions, imports, cashPo
         </div>
       )}
 
+      {/* NAV Breakdown tab */}
+      {tab === 'nav' && (
+        <div>
+          {!navBreakdown ? (
+            <div style={{ ...styles.card, color: colors.muted }}>NAV 数据不可用</div>
+          ) : (
+            <>
+              {/* Total NAV header */}
+              <div style={{ ...styles.card, marginBottom: 16, background: '#f0f9ff', border: '1px solid #bae6fd' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 13, color: '#0369a1', fontWeight: 600 }}>资产净值 (NAV)</div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: navBreakdown.total_nav_usd >= 0 ? '#0369a1' : '#dc2626' }}>
+                      ${fmt(navBreakdown.total_nav_usd)}
+                    </div>
+                    <div style={{ fontSize: 12, color: colors.muted, marginTop: 4 }}>截至 {navBreakdown.as_of_date}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 24, fontSize: 13 }}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: colors.muted }}>持仓成本</div>
+                      <div style={{ fontWeight: 700, color: '#1d4ed8' }}>${fmt(navBreakdown.stock_value.total_cost_usd)}</div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: colors.muted }}>现金</div>
+                      <div style={{ fontWeight: 700, color: navBreakdown.cash.total_usd >= 0 ? '#15803d' : '#dc2626' }}>${fmt(navBreakdown.cash.total_usd)}</div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: colors.muted }}>应计项</div>
+                      <div style={{ fontWeight: 700, color: navBreakdown.accruals.total_usd >= 0 ? '#15803d' : '#dc2626' }}>${fmt(navBreakdown.accruals.total_usd)}</div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: colors.muted }}>证券出借净值</div>
+                      <div style={{ fontWeight: 700 }}>$0.00</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4 cards grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+
+                {/* Card 1: Stock Value */}
+                <div style={styles.card}>
+                  <h3 style={{ margin: '0 0 12px', fontSize: 15, color: '#1d4ed8' }}>📊 持仓成本估值</h3>
+                  <div style={{ fontSize: 13, color: colors.muted, marginBottom: 8 }}>股票持仓以均价×数量估算</div>
+                  {navBreakdown.stock_value.positions.length === 0 ? (
+                    <div style={{ color: colors.muted, fontSize: 13 }}>暂无持仓</div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
+                          <th style={{ textAlign: 'left', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>代码</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>数量</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>均价</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>估值</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {navBreakdown.stock_value.positions.map((p, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                            <td style={{ padding: '5px 0' }}><strong>{p.asset_code}</strong></td>
+                            <td style={{ textAlign: 'right', padding: '5px 0' }}>{fmt(p.quantity, 2)}</td>
+                            <td style={{ textAlign: 'right', padding: '5px 0', color: colors.muted }}>{fmt(p.average_cost, 4)}</td>
+                            <td style={{ textAlign: 'right', padding: '5px 0', fontWeight: 600 }}>${fmt(p.estimated_value_usd)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={3} style={{ padding: '6px 0', fontWeight: 700 }}>合计</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700, color: '#1d4ed8' }}>${fmt(navBreakdown.stock_value.total_cost_usd)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  )}
+                </div>
+
+                {/* Card 2: Cash Balances */}
+                <div style={styles.card}>
+                  <h3 style={{ margin: '0 0 12px', fontSize: 15, color: '#15803d' }}>💵 现金余额</h3>
+                  <div style={{ fontSize: 13, color: colors.muted, marginBottom: 8 }}>保证金账户可能存在负值（融资负债）</div>
+                  {Object.keys(navBreakdown.cash.balances).length === 0 ? (
+                    <div style={{ color: colors.muted, fontSize: 13 }}>暂无现金余额</div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+                        {Object.entries(navBreakdown.cash.balances).map(([ccy, amt]) => (
+                          <div key={ccy} style={{
+                            padding: '10px 16px', borderRadius: 8,
+                            border: `1px solid ${amt < 0 ? '#fca5a5' : colors.border}`,
+                            background: amt < 0 ? '#fef2f2' : '#f0fdf4',
+                            minWidth: 100,
+                          }}>
+                            <div style={{ fontSize: 11, color: colors.muted }}>{ccy}</div>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: amt < 0 ? '#dc2626' : '#15803d' }}>
+                              {amt < 0 ? '' : ''}{amt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </div>
+                            {amt < 0 && <div style={{ fontSize: 10, color: '#dc2626' }}>融资负债</div>}
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: 14, borderTop: `1px solid ${colors.border}`, paddingTop: 8 }}>
+                        合计 (USD): <span style={{ color: navBreakdown.cash.total_usd >= 0 ? '#15803d' : '#dc2626' }}>${fmt(navBreakdown.cash.total_usd)}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Card 3: Securities Lending */}
+                <div style={styles.card}>
+                  <h3 style={{ margin: '0 0 12px', fontSize: 15, color: '#0369a1' }}>🔄 证券出借</h3>
+                  <div style={{ fontSize: 13, color: colors.muted, marginBottom: 8 }}>现金抵押（资产）= 借出证券（负债），净值为零</div>
+                  {navBreakdown.securities_lending.positions.length === 0 ? (
+                    <div style={{ color: colors.muted, fontSize: 13 }}>暂无证券出借记录</div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
+                          <th style={{ textAlign: 'left', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>代码</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>数量</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>抵押金(USD)</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>利率</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {navBreakdown.securities_lending.positions.map((lp, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                            <td style={{ padding: '5px 0' }}><strong>{lp.asset_code}</strong></td>
+                            <td style={{ textAlign: 'right', padding: '5px 0' }}>{fmt(lp.quantity_lent, 0)}</td>
+                            <td style={{ textAlign: 'right', padding: '5px 0' }}>{lp.collateral_usd != null ? `$${fmt(lp.collateral_usd)}` : '—'}</td>
+                            <td style={{ textAlign: 'right', padding: '5px 0' }}>{lp.lending_rate != null ? `${fmt(lp.lending_rate * 100, 3)}%` : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  <div style={{ marginTop: 12, fontSize: 13 }}>
+                    <span style={{ color: colors.muted }}>出借净值：</span><strong>$0.00</strong>
+                    {navBreakdown.securities_lending.income_ytd !== 0 && (
+                      <span style={{ marginLeft: 16, color: colors.muted }}>YTD 出借收入：<strong style={{ color: '#15803d' }}>${fmt(navBreakdown.securities_lending.income_ytd)}</strong></span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Card 4: Accruals */}
+                <div style={styles.card}>
+                  <h3 style={{ margin: '0 0 12px', fontSize: 15, color: '#7c3aed' }}>📋 应计项目</h3>
+                  <div style={{ fontSize: 13, color: colors.muted, marginBottom: 8 }}>影响 NAV 但不走现金账本</div>
+                  {navBreakdown.accruals.items.length === 0 ? (
+                    <div style={{ color: colors.muted, fontSize: 13 }}>暂无未冲销应计项目</div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
+                          <th style={{ textAlign: 'left', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>类型</th>
+                          <th style={{ textAlign: 'left', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>日期</th>
+                          <th style={{ textAlign: 'left', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>代码</th>
+                          <th style={{ textAlign: 'right', padding: '4px 0', color: colors.muted, fontWeight: 500 }}>金额</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {navBreakdown.accruals.items.map((a, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                            <td style={{ padding: '5px 0', fontSize: 11 }}>{a.accrual_type}</td>
+                            <td style={{ padding: '5px 0' }}>{a.accrual_date}</td>
+                            <td style={{ padding: '5px 0' }}>{a.asset_code || '—'}</td>
+                            <td style={{ textAlign: 'right', padding: '5px 0', fontWeight: 600, color: a.amount < 0 ? '#dc2626' : '#15803d' }}>
+                              {a.currency} {fmt(a.amount)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={3} style={{ padding: '6px 0', fontWeight: 700 }}>合计 (USD)</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700, color: navBreakdown.accruals.total_usd >= 0 ? '#15803d' : '#dc2626' }}>${fmt(navBreakdown.accruals.total_usd)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  )}
+                </div>
+
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Import records tab */}
       {tab === 'imports' && (
         <div style={styles.card}>
@@ -455,7 +663,7 @@ export async function getServerSideProps(context: any) {
   }
 
   try {
-    const [account, posData, txData, importData, cashData, priceData, cashBalData, fxData] = await Promise.all([
+    const [account, posData, txData, importData, cashData, priceData, cashBalData, fxData, navData] = await Promise.all([
       getAccount(accountId, auth.accessToken),
       getPositions({ accountId, size: 200, accessToken: auth.accessToken }),
       getTransactions({ accountId, size: 200, accessToken: auth.accessToken }),
@@ -464,6 +672,7 @@ export async function getServerSideProps(context: any) {
       getPrices({ size: 200, accessToken: auth.accessToken }),
       getCashBalances(accountId, undefined, auth.accessToken).catch(() => null),
       getFxSummary(accountId, auth.accessToken).catch(() => null),
+      getNavBreakdown(accountId, undefined, auth.accessToken).catch(() => null),
     ]);
 
     return {
@@ -478,6 +687,7 @@ export async function getServerSideProps(context: any) {
         cashBalances: cashBalData ?? null,
         fxSummary: fxData?.fx_trades ?? [],
         latestPrices: priceData.items ?? [],
+        navBreakdown: navData ?? null,
       },
     };
   } catch (error: any) {
@@ -493,6 +703,7 @@ export async function getServerSideProps(context: any) {
         cashBalances: null,
         fxSummary: [],
         latestPrices: [],
+        navBreakdown: null,
         error: error?.message || 'Failed to load account detail.',
       },
     };

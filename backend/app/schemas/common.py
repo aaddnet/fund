@@ -113,12 +113,24 @@ class AccountCreateRequest(BaseModel):
     holder_name: Optional[str] = None
     broker: str
     account_no: str
+    # V4.1: IB multi-currency margin account fields
+    base_currency: Optional[str] = None
+    account_capabilities: Optional[str] = None   # "Margin" / "Cash" / "Portfolio Margin"
+    is_margin: Optional[bool] = None
+    master_account_no: Optional[str] = None
+    ib_account_no: Optional[str] = None           # e.g. U8312308
 
 class AccountUpdateRequest(BaseModel):
     fund_id: Optional[int] = None
     holder_name: Optional[str] = None
     broker: Optional[str] = None
     account_no: Optional[str] = None
+    # V4.1: IB multi-currency margin account fields
+    base_currency: Optional[str] = None
+    account_capabilities: Optional[str] = None
+    is_margin: Optional[bool] = None
+    master_account_no: Optional[str] = None
+    ib_account_no: Optional[str] = None
 
 class AuthUserCreateRequest(BaseModel):
     username: str

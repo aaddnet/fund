@@ -1150,7 +1150,18 @@ def get_account(account_id: int, db: Session = Depends(get_db), actor: Actor = D
 @router.post("/account")
 def create_account(req: AccountCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
     require_permissions(actor, "accounts.write")
-    account = Account(fund_id=req.fund_id, holder_name=req.holder_name, broker=req.broker, account_no=req.account_no)
+    account = Account(
+        fund_id=req.fund_id,
+        holder_name=req.holder_name,
+        broker=req.broker,
+        account_no=req.account_no,
+        # V4.1: IB margin account fields
+        base_currency=req.base_currency or "USD",
+        account_capabilities=req.account_capabilities,
+        is_margin=req.is_margin or False,
+        master_account_no=req.master_account_no,
+        ib_account_no=req.ib_account_no,
+    )
     db.add(account)
     db.commit()
     db.refresh(account)
@@ -1172,10 +1183,39 @@ def update_account(account_id: int, req: AccountUpdateRequest, db: Session = Dep
         item.broker = req.broker
     if req.account_no is not None:
         item.account_no = req.account_no
+    # V4.1: IB margin account fields
+    if req.base_currency is not None:
+        item.base_currency = req.base_currency
+    if req.account_capabilities is not None:
+        item.account_capabilities = req.account_capabilities
+    if req.is_margin is not None:
+        item.is_margin = req.is_margin
+    if req.master_account_no is not None:
+        item.master_account_no = req.master_account_no
+    if req.ib_account_no is not None:
+        item.ib_account_no = req.ib_account_no
     db.commit()
     db.refresh(item)
     record_audit(db, actor, action="account.update", entity_type="account", entity_id=str(item.id), detail={"account_no": item.account_no})
     return _serialize_account(db, item)
+
+
+@router.get("/account/{account_id}/nav-breakdown")
+def get_account_nav_breakdown(
+    account_id: int,
+    as_of_date: Optional[date] = Query(default=None),
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """V4.1: Full NAV breakdown for an IB multi-currency margin account."""
+    require_permissions(actor, "accounts.read")
+    item = db.query(Account).filter(Account.id == account_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    from app.services.nav_breakdown import get_nav_breakdown
+    from datetime import date as _date
+    effective_date = as_of_date or _date.today()
+    return get_nav_breakdown(account_id, effective_date, db)
 
 
 @router.get("/position")
@@ -1702,6 +1742,12 @@ def _serialize_account(db: Session, item: Account) -> dict:
         "latest_trade_date": latest_trade_date.isoformat() if latest_trade_date else None,
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
+        # V4.1: IB multi-currency margin account fields
+        "base_currency": getattr(item, "base_currency", None) or "USD",
+        "account_capabilities": getattr(item, "account_capabilities", None),
+        "is_margin": getattr(item, "is_margin", None) or False,
+        "master_account_no": getattr(item, "master_account_no", None),
+        "ib_account_no": getattr(item, "ib_account_no", None),
     }
 
 
@@ -1755,6 +1801,29 @@ def _serialize_transaction(item: Transaction) -> dict:
         # Corporate action fields
         "corporate_ratio": _decimal(getattr(item, "corporate_ratio", None)),
         "corporate_ref_code": getattr(item, "corporate_ref_code", None),
+        # V4.1: subtype + fee decomposition
+        "tx_subtype": getattr(item, "tx_subtype", None),
+        "gross_amount": _decimal(getattr(item, "gross_amount", None)),
+        "commission": _decimal(getattr(item, "commission", None)),
+        "transaction_fee": _decimal(getattr(item, "transaction_fee", None)),
+        "other_fee": _decimal(getattr(item, "other_fee", None)),
+        # V4.1: asset metadata
+        "isin": getattr(item, "isin", None),
+        "exchange": getattr(item, "exchange", None),
+        "multiplier": getattr(item, "multiplier", None),
+        "close_price": _decimal(getattr(item, "close_price", None)),
+        "cost_basis": _decimal(getattr(item, "cost_basis", None)),
+        # V4.1: securities lending
+        "lending_counterparty": getattr(item, "lending_counterparty", None),
+        "lending_rate": _decimal(getattr(item, "lending_rate", None)),
+        "collateral_amount": _decimal(getattr(item, "collateral_amount", None)),
+        # V4.1: accruals
+        "accrual_type": getattr(item, "accrual_type", None),
+        "accrual_period_start": item.accrual_period_start.isoformat() if getattr(item, "accrual_period_start", None) else None,
+        "accrual_period_end": item.accrual_period_end.isoformat() if getattr(item, "accrual_period_end", None) else None,
+        "accrual_reversal_id": getattr(item, "accrual_reversal_id", None),
+        # V4.1: internal transfer
+        "counterparty_account": getattr(item, "counterparty_account", None),
         # Metadata
         "import_batch_id": item.import_batch_id,
         "created_at": _iso(item.created_at),

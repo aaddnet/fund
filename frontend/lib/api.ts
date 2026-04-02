@@ -131,6 +131,12 @@ export type Account = {
   latest_snapshot_date?: string | null;
   latest_snapshot_value_usd?: number | null;
   latest_trade_date?: string | null;
+  // V4.1: IB multi-currency margin account fields
+  base_currency?: string | null;
+  account_capabilities?: string | null;
+  is_margin?: boolean | null;
+  master_account_no?: string | null;
+  ib_account_no?: string | null;
 };
 
 export type Position = {
@@ -181,6 +187,29 @@ export type Transaction = {
   // Corporate action fields
   corporate_ratio?: number | null;
   corporate_ref_code?: string | null;
+  // V4.1: subtype + fee decomposition
+  tx_subtype?: string | null;
+  gross_amount?: number | null;
+  commission?: number | null;
+  transaction_fee?: number | null;
+  other_fee?: number | null;
+  // V4.1: asset metadata
+  isin?: string | null;
+  exchange?: string | null;
+  multiplier?: number | null;
+  close_price?: number | null;
+  cost_basis?: number | null;
+  // V4.1: securities lending
+  lending_counterparty?: string | null;
+  lending_rate?: number | null;
+  collateral_amount?: number | null;
+  // V4.1: accruals
+  accrual_type?: string | null;
+  accrual_period_start?: string | null;
+  accrual_period_end?: string | null;
+  accrual_reversal_id?: number | null;
+  // V4.1: internal transfer
+  counterparty_account?: string | null;
   // Metadata
   import_batch_id?: number | null;
   created_at?: string | null;
@@ -283,6 +312,61 @@ export type ImportOverlap = {
   overlap_count: number;
   min_date: string;
   max_date: string;
+};
+
+// V4.1: NAV Breakdown types
+export type NavBreakdownPosition = {
+  asset_code: string;
+  asset_type?: string | null;
+  quantity: number;
+  currency: string;
+  average_cost: number;
+  estimated_value: number;
+  estimated_value_usd: number;
+};
+
+export type NavBreakdownAccrual = {
+  id: number;
+  accrual_type: string;
+  currency: string;
+  amount: number;
+  accrual_date: string;
+  expected_pay_date?: string | null;
+  asset_code?: string | null;
+  is_reversed: boolean;
+};
+
+export type NavBreakdownLendingPosition = {
+  id: number;
+  asset_code: string;
+  quantity_lent: number;
+  collateral_usd?: number | null;
+  lending_rate?: number | null;
+  start_date: string;
+  end_date?: string | null;
+};
+
+export type NavBreakdown = {
+  account_id: number;
+  as_of_date: string;
+  stock_value: {
+    positions: NavBreakdownPosition[];
+    total_cost_usd: number;
+  };
+  cash: {
+    balances: Record<string, number>;
+    total_usd: number;
+  };
+  accruals: {
+    items: NavBreakdownAccrual[];
+    total_usd: number;
+  };
+  securities_lending: {
+    positions: NavBreakdownLendingPosition[];
+    net_usd: number;
+    income_ytd: number;
+  };
+  total_nav_usd: number;
 };
 
 export type ImportBatch = {
@@ -812,6 +896,12 @@ export async function getFxSummary(accountId: number, accessToken?: string | nul
     `/accounts/${accountId}/fx-summary`,
     { accessToken },
   );
+}
+
+// V4.1: NAV Breakdown
+export async function getNavBreakdown(accountId: number, asOfDate?: string, accessToken?: string | null) {
+  const q = asOfDate ? `?as_of_date=${asOfDate}` : '';
+  return fetchJson<NavBreakdown>(`/account/${accountId}/nav-breakdown${q}`, { accessToken });
 }
 
 export async function getShareRegister(params?: { fundId?: number; clientId?: number; accessToken?: string | null }) {

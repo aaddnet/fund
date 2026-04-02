@@ -60,6 +60,12 @@ class Account(Base, TimestampMixin):
     holder_name = Column(String(200))
     broker = Column(String(100), nullable=False)
     account_no = Column(String(100), nullable=False)
+    # V4.1: IB multi-currency margin account fields
+    base_currency = Column(String(10), nullable=True, default="USD")
+    account_capabilities = Column(String(50), nullable=True)  # Margin / Cash / Portfolio Margin
+    is_margin = Column(Boolean, nullable=True, default=False)
+    master_account_no = Column(String(50), nullable=True)  # IB托管账户上级账号
+    ib_account_no = Column(String(50), nullable=True)      # IB账号如 U8312308
 
 
 
@@ -177,6 +183,44 @@ class Transaction(Base, TimestampMixin):
     # ── Corporate action fields ────────────────────────────────────────────
     corporate_ratio = Column(Numeric(10, 6), nullable=True)
     corporate_ref_code = Column(String(50), nullable=True)
+
+    # ── V4.1: Subtype ──────────────────────────────────────────────────────
+    tx_subtype = Column(String(30), nullable=True)
+    # e.g. "eft"/"transfer" under deposit; "ordinary"/"special" under dividend
+
+    # ── V4.1: Fee decomposition (legacy fee column preserved for compat) ───
+    gross_amount = Column(Numeric(24, 8), nullable=True)
+    # Trade amount before fees (qty × price in native currency)
+    commission = Column(Numeric(24, 8), nullable=True, default=0)
+    # Broker commission (always negative or 0)
+    transaction_fee = Column(Numeric(24, 8), nullable=True, default=0)
+    # Exchange/regulatory fee — 港股印花税 etc. (negative)
+    other_fee = Column(Numeric(24, 8), nullable=True, default=0)
+    # ADR fees, dividend fees (negative)
+
+    # ── V4.1: Asset metadata ───────────────────────────────────────────────
+    isin = Column(String(20), nullable=True)           # e.g. KYG3777B1032
+    exchange = Column(String(20), nullable=True)       # HK / US / CN
+    multiplier = Column(Integer, nullable=True, default=1)
+    # Contract multiplier (stock=1, option=100); distinct from option_multiplier
+    close_price = Column(Numeric(24, 8), nullable=True)   # closing price for M2M
+    cost_basis = Column(Numeric(24, 8), nullable=True)    # IB-provided cost basis
+
+    # ── V4.1: Securities lending ───────────────────────────────────────────
+    lending_counterparty = Column(String(100), nullable=True)
+    lending_rate = Column(Numeric(10, 6), nullable=True)   # annualised %
+    collateral_amount = Column(Numeric(24, 8), nullable=True)
+
+    # ── V4.1: Accruals ─────────────────────────────────────────────────────
+    accrual_type = Column(String(20), nullable=True)
+    # "interest_accrual" / "dividend_accrual"
+    accrual_period_start = Column(Date, nullable=True)
+    accrual_period_end = Column(Date, nullable=True)
+    accrual_reversal_id = Column(Integer, ForeignKey("transaction.id"), nullable=True)
+
+    # ── V4.1: Internal transfer ────────────────────────────────────────────
+    counterparty_account = Column(String(50), nullable=True)
+    # e.g. "I164167" for IB internal transfer
 
     @property
     def net_amount(self):
@@ -436,3 +480,55 @@ class PdfImportBatch(Base, TimestampMixin):
             return json.loads(self.pending_deposits or "[]")
         except json.JSONDecodeError:
             return []
+
+
+# ── V4.1: New tables ──────────────────────────────────────────────────────────
+
+class CashCollateral(Base):
+    """Securities lending: IB-managed collateral tracking.
+    When IB lends out a stock, cash collateral is posted and a mirroring
+    securities-lent liability is created. Net impact on NAV = 0.
+    """
+    __tablename__ = "cash_collateral"
+    __table_args__ = (
+        Index("idx_cash_collateral_account_id", "account_id"),
+    )
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
+    asset_code = Column(String(50), nullable=False)    # e.g. TSLA
+    quantity_lent = Column(Numeric(24, 8), nullable=False)   # negative (lent out)
+    collateral_usd = Column(Numeric(24, 8), nullable=True)   # positive (cash posted)
+    lending_rate = Column(Numeric(10, 6), nullable=True)     # annualised %
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=True)    # NULL = still outstanding
+    transaction_id = Column(Integer, ForeignKey("transaction.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Accrual(Base):
+    """Interest/dividend accruals: affect NAV but do not hit the cash ledger.
+
+    Negative amount = liability (unpaid interest, unrecorded dividend payable).
+    Positive amount = asset (declared dividend not yet received).
+
+    Reversal workflow:
+      Month-end → write Accrual(is_reversed=False)
+      Next month actual payment → mark is_reversed=True + write Transaction
+    """
+    __tablename__ = "accrual"
+    __table_args__ = (
+        Index("idx_accrual_account_id", "account_id"),
+        Index("idx_accrual_account_date", "account_id", "accrual_date"),
+    )
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
+    accrual_type = Column(String(20), nullable=False)
+    # "interest_accrual" | "dividend_accrual"
+    currency = Column(String(10), nullable=False)
+    amount = Column(Numeric(24, 8), nullable=False)     # negative = liability
+    accrual_date = Column(Date, nullable=False)
+    expected_pay_date = Column(Date, nullable=True)
+    asset_code = Column(String(50), nullable=True)      # for dividend accruals
+    is_reversed = Column(Boolean, nullable=False, default=False)
+    reversal_date = Column(Date, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
