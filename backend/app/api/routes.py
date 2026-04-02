@@ -61,6 +61,7 @@ from app.services.auth import (
     update_auth_user,
     permissions_for_role,
 )
+from app.services.cash_ledger import get_all_cash_balances, get_cash_balance, get_cash_history
 from app.services.exchange_rate import fetch_and_save_rates, save_rate_manual, save_rates_csv
 from app.services.fee_service import calc_fee, list_fees
 from app.services.import_service import confirm_batch, get_batch, list_batches, reset_batch, serialize_batch, upload_csv
@@ -929,6 +930,153 @@ def activate_fund(fund_id: int, db: Session = Depends(get_db), actor: Actor = De
     return _serialize_fund(fund)
 
 
+# ── V4.3 Cash Ledger API (read-only, calculated from transactions) ────────
+
+@router.get("/cash/balance")
+def get_cash_balance_all(
+    account_id: int,
+    as_of_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Return all currency balances for an account, calculated from transactions."""
+    require_permissions(actor, "nav.read")
+    as_of = as_of_date or date.today()
+    balances = get_all_cash_balances(account_id, as_of, db)
+    return {
+        "account_id": account_id,
+        "as_of_date": as_of.isoformat(),
+        "balances": {k: float(v) for k, v in balances.items()},
+    }
+
+
+@router.get("/cash/balance/{currency}")
+def get_cash_balance_currency(
+    currency: str,
+    account_id: int,
+    as_of_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Return single-currency balance for an account."""
+    require_permissions(actor, "nav.read")
+    as_of = as_of_date or date.today()
+    bal = get_cash_balance(account_id, currency.upper(), as_of, db)
+    return {
+        "account_id": account_id,
+        "currency": currency.upper(),
+        "as_of_date": as_of.isoformat(),
+        "balance": float(bal),
+    }
+
+
+@router.get("/cash/flow")
+def get_cash_flow(
+    account_id: int,
+    currency: str = "USD",
+    limit: int = Query(default=500, le=2000),
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Return chronological cash ledger entries with running balance."""
+    require_permissions(actor, "nav.read")
+    events = get_cash_history(account_id, currency.upper(), db, limit=limit)
+    return [
+        {
+            "tx_id":        e.tx_id,
+            "trade_date":   e.trade_date.isoformat(),
+            "settle_date":  e.settle_date.isoformat() if e.settle_date else None,
+            "tx_category":  e.tx_category,
+            "tx_type":      e.tx_type,
+            "description":  e.description,
+            "currency":     e.currency,
+            "delta":        float(e.delta),
+            "balance_after":float(e.balance_after),
+        }
+        for e in events
+    ]
+
+
+@router.get("/cash/flow/export")
+def export_cash_flow(
+    account_id: int,
+    currency: str = "USD",
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Download cash flow as CSV."""
+    import io as _io
+    import csv as _csv
+    require_permissions(actor, "nav.read")
+    events = get_cash_history(account_id, currency.upper(), db, limit=10000)
+    # Events returned latest-first; reverse for chronological CSV
+    events_chrono = list(reversed(events))
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(["date", "settle_date", "tx_category", "tx_type", "description", "asset_code", "delta", "balance"])
+    for e in events_chrono:
+        writer.writerow([
+            e.trade_date.isoformat(),
+            e.settle_date.isoformat() if e.settle_date else "",
+            e.tx_category,
+            e.tx_type,
+            e.description or "",
+            "",
+            float(e.delta),
+            float(e.balance_after),
+        ])
+    content = buf.getvalue().encode("utf-8")
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=cash_flow_{account_id}_{currency}.csv"},
+    )
+
+
+# ── Duplicate detection ───────────────────────────────────────────────────
+
+@router.post("/import/check-duplicate")
+def check_import_duplicate(
+    req: dict,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(get_actor),
+):
+    """Check if a transaction already exists (for import preview dedup)."""
+    require_permissions(actor, "import.write")
+    account_id = req.get("account_id")
+    tx_category = (req.get("tx_category") or "").upper()
+    existing = None
+
+    if tx_category == "TRADE":
+        q = db.query(Transaction).filter(
+            Transaction.account_id == account_id,
+            Transaction.trade_date == req.get("trade_date"),
+            Transaction.asset_code == req.get("asset_code"),
+        )
+        if req.get("quantity") is not None:
+            q = q.filter(Transaction.quantity == req["quantity"])
+        if req.get("price") is not None:
+            q = q.filter(Transaction.price == req["price"])
+        existing = q.first()
+    else:
+        q = db.query(Transaction).filter(
+            Transaction.account_id == account_id,
+            Transaction.trade_date == req.get("trade_date"),
+            Transaction.tx_type == req.get("tx_type"),
+            Transaction.currency == req.get("currency"),
+        )
+        if req.get("gross_amount") is not None:
+            q = q.filter(Transaction.gross_amount == req["gross_amount"])
+        existing = q.first()
+
+    return {
+        "is_duplicate": existing is not None,
+        "existing_tx_id": existing.id if existing else None,
+    }
+
+
+# ── Legacy /cash list (read-only) ─────────────────────────────────────────
+
 @router.get("/cash")
 def list_cash_positions(
     fund_id: Optional[int] = None,
@@ -953,53 +1101,16 @@ def list_cash_positions(
     return [_serialize_cash(r) for r in rows]
 
 
-@router.post("/cash", status_code=201)
+@router.post("/cash", status_code=403, deprecated=True)
 def upsert_cash_position(req: CashPositionUpsertRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_permissions(actor, "nav.write")
-    acct = db.query(Account).filter(Account.id == req.account_id).first()
-    if not acct:
-        raise HTTPException(status_code=404, detail="Account not found.")
-    existing = db.query(CashPosition).filter_by(
-        account_id=req.account_id, currency=req.currency.upper(), snapshot_date=req.snapshot_date
-    ).first()
-    if existing:
-        before_amount = float(existing.amount)
-        existing.amount = req.amount
-        if req.note is not None:
-            existing.note = req.note
-        db.commit()
-        db.refresh(existing)
-        record_audit(db, actor, action="cash.update", entity_type="cash_position", entity_id=str(existing.id),
-                     detail={"account_id": req.account_id, "currency": req.currency.upper(), "snapshot_date": req.snapshot_date.isoformat(),
-                             "before_amount": before_amount, "after_amount": float(req.amount), "note": req.note})
-        return _serialize_cash(existing)
-    row = CashPosition(
-        account_id=req.account_id,
-        currency=req.currency.upper(),
-        amount=req.amount,
-        snapshot_date=req.snapshot_date,
-        note=req.note,
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    record_audit(db, actor, action="cash.create", entity_type="cash_position", entity_id=str(row.id),
-                 detail={"account_id": req.account_id, "currency": req.currency.upper(), "snapshot_date": req.snapshot_date.isoformat(),
-                         "amount": float(req.amount), "note": req.note})
-    return _serialize_cash(row)
+    """Deprecated in V4.3 — cash positions are now calculated from transactions."""
+    raise HTTPException(status_code=403, detail="Manual cash position entry is disabled in V4.3. Cash balances are calculated automatically from transactions.")
 
 
-@router.delete("/cash/{cash_id}", status_code=204)
+@router.delete("/cash/{cash_id}", status_code=403, deprecated=True)
 def delete_cash_position(cash_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
-    require_permissions(actor, "nav.write")
-    row = db.query(CashPosition).filter(CashPosition.id == cash_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Cash position not found.")
-    record_audit(db, actor, action="cash.delete", entity_type="cash_position", entity_id=str(row.id),
-                 detail={"account_id": row.account_id, "currency": row.currency, "snapshot_date": row.snapshot_date.isoformat(),
-                         "amount": float(row.amount)})
-    db.delete(row)
-    db.commit()
+    """Deprecated in V4.3 — cash positions are read-only calculated values."""
+    raise HTTPException(status_code=403, detail="Manual cash position deletion is disabled in V4.3.")
 
 
 @router.get("/share/register")

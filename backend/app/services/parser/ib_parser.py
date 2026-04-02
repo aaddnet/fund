@@ -607,3 +607,435 @@ def parse(path: str):
     """Legacy file-path interface."""
     from pathlib import Path
     return preprocess(Path(path).read_bytes())
+
+
+# ── V4.3 Section-level parsers ────────────────────────────────────────────
+# These return TransactionRow objects directly, used by the new import preview.
+
+import re
+from datetime import date
+from typing import Optional
+
+from app.services.parser.base_parser import TransactionRow
+
+IB_SECTION_MAP: dict[str, str] = {
+    "Trades":             "parse_ib_trades",
+    "Cash Transactions":  "parse_ib_cash",
+    "Transfers":          "parse_ib_transfers",
+    "Interest":           "parse_ib_interest",
+    "Dividends":          "parse_ib_dividends",
+    "Fees":               "parse_ib_fees",
+    "Forex":              "parse_ib_forex",
+}
+
+SKIP_SECTIONS: set[str] = {
+    "Mark-to-Market Performance Summary",
+    "Realized & Unrealized Performance Summary",
+    "Open Positions",
+    "Net Stock Position Summary",
+    "Transaction Fees",
+    "Financial Instrument Information",
+    "IB Managed Securities Lent",
+    "Notes/Legal Notes",
+    "Change in Dividend Accruals",
+}
+
+
+def safe_float(s) -> Optional[float]:
+    """Parse to float, return None on failure."""
+    if s is None:
+        return None
+    try:
+        return float(str(s).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_ib_datetime(s: str) -> date:
+    """Parse IB datetime string: '2018-03-29, 09:30:00' → date(2018, 3, 29)."""
+    return _normalise_ib_datetime(s or "")  # type: ignore[return-value]
+    # _normalise_ib_datetime returns str; convert:
+
+
+def _parse_ib_date(s: str) -> date:
+    """Return date object from IB date string."""
+    norm = _normalise_ib_datetime(s or "")
+    if not norm:
+        return date.today()
+    try:
+        return date.fromisoformat(norm)
+    except ValueError:
+        return date.today()
+
+
+def _is_option_symbol(symbol: str) -> bool:
+    """Detect IB option symbols like 'NIO 241115C4000' or 'AAPL 240119C00185000'."""
+    s = symbol.upper()
+    # Pattern: LETTERS SPACES 6DIGITS [CP] DIGITS
+    return bool(re.search(r"[A-Z]+\s+\d{6}[CP]\d+", s))
+
+
+def _identify_asset_type(symbol: str, description: str = "") -> str:
+    s = symbol.upper()
+    desc = description.lower()
+    if _is_option_symbol(s):
+        return "option"
+    if re.search(r"\d{6}[CP]\d+", s):
+        return "option"
+    if "etf" in desc or "fund" in desc:
+        return "etf"
+    if "bond" in desc or "note" in desc or "treasury" in desc:
+        return "bond"
+    return "stock"
+
+
+def _extract_interest_period(description: str) -> Optional[date]:
+    """Extract month/year from e.g. 'USD Debit Interest for Oct-2018'."""
+    m = re.search(r"(\w{3})-(\d{4})", description or "")
+    if not m:
+        return None
+    month_map = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    }
+    month_name = m.group(1).lower()
+    month = month_map.get(month_name)
+    year = int(m.group(2))
+    if not month:
+        return None
+    import calendar
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, last_day)
+
+
+def _hdr_idx(header: list[str], *names: str) -> Optional[int]:
+    """Find column index by any of the candidate names (case-insensitive)."""
+    lower = [h.lower().strip() for h in header]
+    for n in names:
+        try:
+            return lower.index(n.lower())
+        except ValueError:
+            pass
+    return None
+
+
+def _get_col(row: list[str], idx: Optional[int], default: str = "") -> str:
+    if idx is None or idx >= len(row):
+        return default
+    return row[idx].strip()
+
+
+# ── Section parsers ───────────────────────────────────────────────────────
+
+def parse_ib_trades(rows: list[list[str]], header: list[str]) -> list[TransactionRow]:
+    results = []
+    i_date    = _hdr_idx(header, "date/time", "datetime", "tradedate")
+    i_symbol  = _hdr_idx(header, "symbol")
+    i_desc    = _hdr_idx(header, "description")
+    i_qty     = _hdr_idx(header, "quantity")
+    i_price   = _hdr_idx(header, "t. price", "tradeprice", "price")
+    i_proceeds= _hdr_idx(header, "proceeds")
+    i_comm    = _hdr_idx(header, "comm/fee", "ibcommission", "commission")
+    i_basis   = _hdr_idx(header, "basis", "cost basis")
+    i_pnl     = _hdr_idx(header, "realized p/l", "realizedpl")
+    i_curr    = _hdr_idx(header, "currency")
+    i_cat     = _hdr_idx(header, "asset category", "assetcategory")
+
+    for row in rows:
+        symbol = _get_col(row, i_symbol)
+        if not symbol or "Total" in symbol or symbol == "Symbol":
+            continue
+
+        qty_s = _get_col(row, i_qty).replace(",", "")
+        qty_f = safe_float(qty_s)
+        if qty_f is None or qty_f == 0:
+            continue
+
+        asset_cat = _get_col(row, i_cat).lower()
+        description = _get_col(row, i_desc)
+        currency = _get_col(row, i_curr) or "USD"
+
+        # Classify tx_type
+        if asset_cat == "forex":
+            tx_type = "fx_trade"
+        elif _is_option_symbol(symbol):
+            tx_type = "option_buy" if qty_f > 0 else "option_sell"
+        else:
+            tx_type = "stock_buy" if qty_f > 0 else "stock_sell"
+
+        results.append(TransactionRow(
+            trade_date=   _parse_ib_date(_get_col(row, i_date)),
+            tx_category=  "TRADE",
+            tx_type=      tx_type,
+            currency=     currency,
+            asset_code=   symbol.strip(),
+            asset_name=   description,
+            asset_type=   _identify_asset_type(symbol, description),
+            quantity=     abs(qty_f),
+            price=        safe_float(_get_col(row, i_price).replace(",", "")),
+            gross_amount= safe_float(_get_col(row, i_proceeds).replace(",", "")),
+            commission=   safe_float(_get_col(row, i_comm).replace(",", "")),
+            cost_basis=   safe_float(_get_col(row, i_basis).replace(",", "")),
+            realized_pnl= safe_float(_get_col(row, i_pnl).replace(",", "")),
+            description=  description,
+        ))
+    return results
+
+
+def parse_ib_cash(rows: list[list[str]], header: list[str]) -> list[TransactionRow]:
+    results = []
+    i_date = _hdr_idx(header, "date", "settle date", "settledate")
+    i_curr = _hdr_idx(header, "currency")
+    i_amt  = _hdr_idx(header, "amount")
+    i_desc = _hdr_idx(header, "description")
+    i_sym  = _hdr_idx(header, "symbol")
+
+    for row in rows:
+        amt = safe_float(_get_col(row, i_amt).replace(",", ""))
+        if amt is None:
+            continue
+        desc = _get_col(row, i_desc)
+        tx_type = identify_cash_type(desc)
+
+        # FX Translation and zero-amount rows → mark as "other" (待处理)
+        is_other = tx_type in ("adjustment",) and (
+            "fx translation" in desc.lower() or
+            "accrual" in desc.lower() or
+            amt == 0
+        )
+
+        results.append(TransactionRow(
+            trade_date=   _parse_ib_date(_get_col(row, i_date)),
+            tx_category=  "CASH",
+            tx_type=      tx_type,
+            currency=     _get_col(row, i_curr) or "USD",
+            gross_amount= amt,
+            asset_code=   _get_col(row, i_sym) or None,
+            description=  desc,
+            is_other=     is_other,
+        ))
+    return results
+
+
+def parse_ib_transfers(rows: list[list[str]], header: list[str]) -> list[TransactionRow]:
+    results = []
+    i_date = _hdr_idx(header, "date", "settle date")
+    i_curr = _hdr_idx(header, "currency")
+    i_amt  = _hdr_idx(header, "amount", "cash amount")
+    i_desc = _hdr_idx(header, "description")
+
+    for row in rows:
+        amt = safe_float(_get_col(row, i_amt).replace(",", ""))
+        if amt is None:
+            continue
+        results.append(TransactionRow(
+            trade_date=   _parse_ib_date(_get_col(row, i_date)),
+            tx_category=  "CASH",
+            tx_type=      "deposit_transfer",
+            currency=     _get_col(row, i_curr) or "USD",
+            gross_amount= amt,
+            description=  _get_col(row, i_desc),
+        ))
+    return results
+
+
+def parse_ib_interest(rows: list[list[str]], header: list[str]) -> list[TransactionRow]:
+    results = []
+    i_date = _hdr_idx(header, "date", "settle date")
+    i_curr = _hdr_idx(header, "currency")
+    i_amt  = _hdr_idx(header, "amount")
+    i_desc = _hdr_idx(header, "description")
+
+    for row in rows:
+        amt = safe_float(_get_col(row, i_amt).replace(",", ""))
+        if amt is None:
+            continue
+        desc = _get_col(row, i_desc)
+        tx_type = "interest_debit" if (amt or 0) < 0 else "interest_credit"
+        period = _extract_interest_period(desc)
+
+        results.append(TransactionRow(
+            trade_date=        _parse_ib_date(_get_col(row, i_date)),
+            tx_category=       "CASH",
+            tx_type=           tx_type,
+            currency=          _get_col(row, i_curr) or "USD",
+            gross_amount=      amt,
+            description=       desc,
+            accrual_period_end=period,
+        ))
+    return results
+
+
+def parse_ib_dividends(rows: list[list[str]], header: list[str]) -> list[TransactionRow]:
+    results = []
+    i_date = _hdr_idx(header, "date", "ex date")
+    i_curr = _hdr_idx(header, "currency")
+    i_amt  = _hdr_idx(header, "amount")
+    i_desc = _hdr_idx(header, "description")
+    i_sym  = _hdr_idx(header, "symbol")
+
+    for row in rows:
+        amt = safe_float(_get_col(row, i_amt).replace(",", ""))
+        if amt is None:
+            continue
+        desc = _get_col(row, i_desc).lower()
+
+        if "fee" in desc:
+            tx_type = "dividend_fee"
+        elif "payment in lieu" in desc or "pil" in desc:
+            tx_type = "pil"
+        else:
+            tx_type = "dividend"
+
+        results.append(TransactionRow(
+            trade_date=   _parse_ib_date(_get_col(row, i_date)),
+            tx_category=  "CASH",
+            tx_type=      tx_type,
+            currency=     _get_col(row, i_curr) or "USD",
+            gross_amount= amt,
+            asset_code=   _get_col(row, i_sym) or None,
+            description=  _get_col(row, i_desc),
+        ))
+    return results
+
+
+def parse_ib_fees(rows: list[list[str]], header: list[str]) -> list[TransactionRow]:
+    results = []
+    i_date = _hdr_idx(header, "date", "settle date")
+    i_curr = _hdr_idx(header, "currency")
+    i_amt  = _hdr_idx(header, "amount")
+    i_desc = _hdr_idx(header, "description")
+
+    for row in rows:
+        amt = safe_float(_get_col(row, i_amt).replace(",", ""))
+        if amt is None:
+            continue
+        desc = _get_col(row, i_desc).lower()
+        if "adr" in desc:
+            tx_type = "adr_fee"
+        else:
+            tx_type = "other_fee"
+
+        results.append(TransactionRow(
+            trade_date=   _parse_ib_date(_get_col(row, i_date)),
+            tx_category=  "CASH",
+            tx_type=      tx_type,
+            currency=     _get_col(row, i_curr) or "USD",
+            gross_amount= amt,
+            description=  _get_col(row, i_desc),
+        ))
+    return results
+
+
+def parse_ib_forex(rows: list[list[str]], header: list[str]) -> list[TransactionRow]:
+    """
+    IB Forex section: each row has two currencies in the symbol like 'USD.HKD'.
+    Quantity column gives amount of base currency (sold if negative, bought if positive).
+    Proceeds = counter currency amount.
+    """
+    results = []
+    i_date    = _hdr_idx(header, "date/time", "datetime")
+    i_sym     = _hdr_idx(header, "symbol")
+    i_qty     = _hdr_idx(header, "quantity")
+    i_price   = _hdr_idx(header, "t. price", "price")
+    i_proceeds= _hdr_idx(header, "proceeds")
+    i_comm    = _hdr_idx(header, "comm/fee", "commission")
+    i_curr    = _hdr_idx(header, "currency")
+
+    for row in rows:
+        symbol = _get_col(row, i_sym)
+        if not symbol or "Total" in symbol:
+            continue
+        qty_f = safe_float(_get_col(row, i_qty).replace(",", ""))
+        if qty_f is None or qty_f == 0:
+            continue
+
+        proceeds_f = safe_float(_get_col(row, i_proceeds).replace(",", ""))
+        comm_f = safe_float(_get_col(row, i_comm).replace(",", ""))
+        currency = _get_col(row, i_curr) or "USD"
+
+        # Symbol like "USD.HKD": left = from, right = to
+        parts = symbol.split(".")
+        from_curr = parts[0].strip() if len(parts) >= 1 else currency
+        to_curr   = parts[1].strip() if len(parts) >= 2 else currency
+
+        # qty_f is amount of from_curr (negative = we sold from_curr)
+        from_amount = float(qty_f)          # already signed
+        to_amount   = float(proceeds_f) if proceeds_f is not None else 0.0
+
+        rate_f = safe_float(_get_col(row, i_price).replace(",", ""))
+
+        results.append(TransactionRow(
+            trade_date=      _parse_ib_date(_get_col(row, i_date)),
+            tx_category=     "FX",
+            tx_type=         "fx_trade",
+            currency=        currency,
+            asset_code=      symbol,
+            fx_from_currency=from_curr,
+            fx_from_amount=  from_amount,
+            fx_to_currency=  to_curr,
+            fx_to_amount=    to_amount,
+            fx_rate=         rate_f,
+            commission=      comm_f,
+            description=     f"FX {from_curr}/{to_curr}",
+        ))
+    return results
+
+
+# ── V4.3 main entry: multi-section Activity Statement parser ─────────────
+
+def parse_ib_activity_v43(text: str) -> list[TransactionRow]:
+    """
+    Parse a full IB Activity Statement CSV into a list of TransactionRow objects.
+    Handles multi-section format: reads all Section headers, dispatches to
+    section-level parse functions, skips non-transactional sections.
+    """
+    _SECTION_PARSERS = {
+        "trades":             parse_ib_trades,
+        "cash transactions":  parse_ib_cash,
+        "transfers":          parse_ib_transfers,
+        "interest":           parse_ib_interest,
+        "dividends":          parse_ib_dividends,
+        "fees":               parse_ib_fees,
+        "forex":              parse_ib_forex,
+    }
+    _SKIP = {s.lower() for s in SKIP_SECTIONS}
+
+    reader = csv.reader(io.StringIO(text))
+    # Collect section name → (header, rows)
+    sections: dict[str, tuple[list[str], list[list[str]]]] = {}
+    current_section: Optional[str] = None
+    current_header: list[str] = []
+
+    for row in reader:
+        if not row:
+            continue
+        section_name = row[0].strip()
+        row_type = row[1].strip() if len(row) > 1 else ""
+
+        if row_type == "Header":
+            current_section = section_name
+            current_header = [c.strip() for c in row[2:]]
+            if current_section not in sections:
+                sections[current_section] = (current_header, [])
+            else:
+                sections[current_section] = (current_header, sections[current_section][1])
+        elif row_type == "Data" and current_section:
+            discriminator = row[2].strip() if len(row) > 2 else ""
+            if discriminator.lower() in ("subtotal", "total"):
+                continue
+            data = [c.strip() for c in row[2:]]
+            if current_section in sections:
+                sections[current_section][1].append(data)
+
+    results: list[TransactionRow] = []
+    for section_name, (header, rows) in sections.items():
+        section_lower = section_name.lower()
+        if section_lower in _SKIP:
+            continue
+        parser_fn = _SECTION_PARSERS.get(section_lower)
+        if parser_fn and rows:
+            parsed = parser_fn(rows, header)
+            results.extend(parsed)
+
+    return results
