@@ -222,6 +222,23 @@ class Transaction(Base, TimestampMixin):
     counterparty_account = Column(String(50), nullable=True)
     # e.g. "I164167" for IB internal transfer
 
+    # ── V4.2: Securities lending (detailed) ───────────────────────────────
+    lending_asset_code = Column(String(50), nullable=True)    # stock lent
+    lending_quantity = Column(Numeric(24, 8), nullable=True)  # qty lent (negative)
+    lending_rate_pct = Column(Numeric(10, 6), nullable=True)  # annualised rate %
+
+    # ── V4.2: Accrual reversal flag ───────────────────────────────────────
+    is_accrual_reversal = Column(Boolean, nullable=True, default=False)
+    # TRUE = this reverses a prior accrual (next period cancels previous)
+
+    # ── V4.2: Corporate action new code ───────────────────────────────────
+    corporate_new_code = Column(String(50), nullable=True)
+    # new ticker after spinoff/split
+
+    # ── V4.2: Audit trail ─────────────────────────────────────────────────
+    created_by = Column(Integer, ForeignKey("auth_user.id"), nullable=True)
+    updated_by = Column(Integer, ForeignKey("auth_user.id"), nullable=True)
+
     @property
     def net_amount(self):
         """Net cash impact = amount + fee (fee is already negative)."""

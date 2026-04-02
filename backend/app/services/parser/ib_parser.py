@@ -139,6 +139,62 @@ _IB_FLEX_COL_MAP = {
 # "Transactions" is used in IB's 1Y/Transactions Statement export format
 _TRADE_SECTIONS = {"trades", "transactions", "transaction history", "交易"}
 
+# V4.2: IB Activity Statement DataDiscriminator → tx_category + tx_type routing
+DISCRIMINATOR_MAP: dict[str, dict] = {
+    "trades":               {"tx_category": "TRADE"},
+    "cash transactions":    {"tx_category": "CASH"},
+    "transfers":            {"tx_category": "CASH",   "tx_type": "deposit_transfer"},
+    "interest":             {"tx_category": "CASH"},
+    "dividends":            {"tx_category": "CASH"},
+    "fees":                 {"tx_category": "CASH"},
+    "forex":                {"tx_category": "FX",     "tx_type": "fx_trade"},
+    "securities lent":      {"tx_category": "LENDING"},
+}
+
+
+def identify_cash_type(description: str) -> str:
+    """
+    V4.2: Map a Cash Transactions description string to the appropriate tx_type.
+    Falls back to 'adjustment' for unrecognised descriptions.
+    """
+    desc = (description or "").lower()
+    if "electronic fund transfer" in desc:
+        return "deposit_eft"
+    elif "internal transfer" in desc or "account transfer" in desc:
+        return "deposit_transfer"
+    elif "debit interest" in desc or "margin interest" in desc:
+        return "interest_debit"
+    elif "credit interest" in desc:
+        return "interest_credit"
+    elif "dividend" in desc and "fee" in desc:
+        return "dividend_fee"
+    elif "payment in lieu" in desc or "pil" in desc:
+        return "pil"
+    elif "dividend" in desc:
+        return "dividend"
+    elif "adr management fee" in desc or "adr fee" in desc:
+        return "adr_fee"
+    elif "withdrawal" in desc:
+        return "withdrawal"
+    elif "deposit" in desc:
+        return "deposit_eft"
+    elif "interest accrual" in desc:
+        return "interest_accrual"
+    elif "dividend accrual" in desc:
+        return "dividend_accrual"
+    elif "accrual reversal" in desc:
+        return "interest_accrual"
+    elif "securities lent" in desc:
+        return "lending_out"
+    elif "securities returned" in desc:
+        return "lending_return"
+    elif "interest on customer collateral" in desc:
+        return "lending_income"
+    elif "adr" in desc and "fee" in desc:
+        return "adr_fee"
+    else:
+        return "adjustment"
+
 
 def preprocess(raw: bytes) -> bytes:
     """
@@ -446,15 +502,15 @@ def _emit_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
         # Determine tx_type from explicit column or quantity sign
         explicit_type = _get("tx_type").strip().lower()
         if is_forex:
-            tx_type = "forex_buy" if qty > 0 else "forex_sell"
+            tx_type = "fx_trade"
         elif is_cash:
-            tx_type = "cash_in" if qty > 0 else "cash_out"
+            tx_type = identify_cash_type(description)
         elif explicit_type in ("buy", "buy/sell:buy"):
-            tx_type = "buy"
+            tx_type = "stock_buy"
         elif explicit_type in ("sell", "buy/sell:sell"):
-            tx_type = "sell"
+            tx_type = "stock_sell"
         else:
-            # V4.1: check description for EN keywords before defaulting to buy/sell
+            # V4.2: check description for EN keywords before defaulting to buy/sell
             desc_lower = description.lower()
             en_matched = False
             for kw, mapped in _EN_DESCRIPTION_KEYWORDS.items():
@@ -463,7 +519,7 @@ def _emit_rows(data_rows: list[list[str]], col_idx: dict[str, int]) -> bytes:
                     en_matched = True
                     break
             if not en_matched:
-                tx_type = "sell" if qty < 0 else "buy"
+                tx_type = "stock_sell" if qty < 0 else "stock_buy"
 
         price_raw = _get("price").replace(",", "") if "price" in col_idx else "0"
         try:

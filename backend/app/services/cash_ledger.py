@@ -51,64 +51,101 @@ def get_cash_impacts(tx: Transaction) -> list[CashImpact]:
     """
     Given a Transaction, return list of CashImpact entries (one per affected currency).
 
-    Rules:
-    - EQUITY buy/sell:   cash decreases/increases by quantity × price + fee
-    - EQUITY option:     premium flow + fee
-    - CASH (all):        net_amount (amount + fee) in the transaction currency
-    - FX fx_trade:       from_currency decreases, to_currency increases, fee in main currency
-    - MARGIN:            same as CASH
-    - CORPORATE:         no direct cash impact (unless rights_issue etc.)
+    V4.2 rules (§2.3):
+    - TRADE buy/sell:      net = gross_amount + commission + transaction_fee + other_fee
+    - TRADE option:        premium flow via gross_amount + fees
+    - TRADE option_expire: no cash
+    - CASH (all sub-types):net = gross_amount + commission + transaction_fee + other_fee
+    - FX fx_trade:         from_currency reduces, to_currency increases, commission in tx.currency
+    - LENDING lending_income: gross_amount + fees hit cash
+    - LENDING lending_out/return: no cash (collateral tracked separately)
+    - ACCRUAL:             no cash
+    - CORPORATE stock_split/reverse_split: no cash
+    - CORPORATE rights_issue: net cash outflow
+
+    Legacy EQUITY / MARGIN categories are also supported for backward compat.
     """
     impacts: list[CashImpact] = []
     settle = tx.settle_date or tx.trade_date
 
     category = (tx.tx_category or "EQUITY").upper()
     tx_type = (tx.tx_type or "").lower()
-    fee = Decimal(str(tx.fee or 0))
 
-    if category == "EQUITY":
-        if tx_type in ("buy", "sell"):
-            qty = Decimal(str(tx.quantity or 0))
+    # V4.2 net calculation helper
+    def _net_v42():
+        g = Decimal(str(tx.gross_amount or 0))
+        c = Decimal(str(tx.commission or 0))
+        t = Decimal(str(tx.transaction_fee or 0))
+        o = Decimal(str(tx.other_fee or 0))
+        return g + c + t + o
+
+    # Legacy net (pre-v4.2): amount + fee
+    def _net_legacy():
+        a = Decimal(str(tx.amount or 0))
+        f = Decimal(str(tx.fee or 0))
+        return a + f
+
+    def _net():
+        """Use v4.2 fields if gross_amount is set, else fall back to legacy."""
+        if tx.gross_amount is not None:
+            return _net_v42()
+        return _net_legacy()
+
+    # ── TRADE (v4.2) ──────────────────────────────────────────────────────
+    if category == "TRADE":
+        if tx_type in ("stock_buy", "option_buy", "buy", "buy_option", "option_exercise", "rights_issue"):
+            net = _net()
+            if net != ZERO:
+                impacts.append(CashImpact(currency=tx.currency, delta=net, settle_date=settle))
+
+        elif tx_type in ("stock_sell", "option_sell", "sell", "sell_option"):
+            net = _net()
+            if net != ZERO:
+                impacts.append(CashImpact(currency=tx.currency, delta=net, settle_date=settle))
+
+        # option_expire, stock_split, reverse_split: no direct cash
+
+    # ── EQUITY (legacy) ───────────────────────────────────────────────────
+    elif category == "EQUITY":
+        fee = Decimal(str(tx.fee or 0))
+        if tx_type in ("buy", "stock_buy"):
+            qty = abs(Decimal(str(tx.quantity or 0)))
             price = Decimal(str(tx.price or 0))
-            # buy: cash out (negative), sell: cash in (positive)
-            direction = Decimal("-1") if tx_type == "buy" else Decimal("1")
-            cash_delta = direction * abs(qty) * price + fee
-            impacts.append(CashImpact(
-                currency=tx.currency,
-                delta=cash_delta,
-                settle_date=settle,
-            ))
+            delta = -(qty * price) + fee  # outflow
+            impacts.append(CashImpact(currency=tx.currency, delta=delta, settle_date=settle))
 
-        elif tx_type in ("buy_option", "sell_option"):
-            qty = Decimal(str(tx.quantity or 0))
+        elif tx_type in ("sell", "stock_sell"):
+            qty = abs(Decimal(str(tx.quantity or 0)))
+            price = Decimal(str(tx.price or 0))
+            delta = qty * price + fee  # inflow
+            impacts.append(CashImpact(currency=tx.currency, delta=delta, settle_date=settle))
+
+        elif tx_type in ("buy_option", "option_buy"):
+            qty = abs(Decimal(str(tx.quantity or 0)))
             price = Decimal(str(tx.price or 0))
             multiplier = Decimal(str(tx.option_multiplier or 100))
-            premium = abs(qty) * price * multiplier
-            # buy_option: pay premium; sell_option: receive premium
-            direction = Decimal("-1") if tx_type == "buy_option" else Decimal("1")
-            cash_delta = direction * premium + fee
-            impacts.append(CashImpact(
-                currency=tx.currency,
-                delta=cash_delta,
-                settle_date=settle,
-            ))
+            delta = -(qty * price * multiplier) + fee
+            impacts.append(CashImpact(currency=tx.currency, delta=delta, settle_date=settle))
 
-        # option_expire, option_exercise, stock_split, etc. → no direct cash flow
-        # (option_exercise creates a new buy/sell transaction for the underlying)
+        elif tx_type in ("sell_option", "option_sell"):
+            qty = abs(Decimal(str(tx.quantity or 0)))
+            price = Decimal(str(tx.price or 0))
+            multiplier = Decimal(str(tx.option_multiplier or 100))
+            delta = qty * price * multiplier + fee
+            impacts.append(CashImpact(currency=tx.currency, delta=delta, settle_date=settle))
 
+    # ── CASH ──────────────────────────────────────────────────────────────
     elif category in ("CASH", "MARGIN"):
-        # amount = gross flow, fee is already negative
-        amount = Decimal(str(tx.amount or 0))
-        net = amount + fee
+        # Covers: deposit_eft, deposit_transfer, withdrawal, dividend, pil,
+        #         dividend_fee, interest_debit, interest_credit, adr_fee,
+        #         other_fee, adjustment, lending_income
+        net = _net()
         if net != ZERO:
-            impacts.append(CashImpact(
-                currency=tx.currency,
-                delta=net,
-                settle_date=settle,
-            ))
+            impacts.append(CashImpact(currency=tx.currency, delta=net, settle_date=settle))
 
+    # ── FX ────────────────────────────────────────────────────────────────
     elif category == "FX":
-        if tx_type == "fx_trade":
+        if tx_type in ("fx_trade", "fx"):
             if tx.fx_from_currency and tx.fx_from_amount is not None:
                 impacts.append(CashImpact(
                     currency=tx.fx_from_currency,
@@ -121,34 +158,34 @@ def get_cash_impacts(tx: Transaction) -> list[CashImpact]:
                     delta=Decimal(str(tx.fx_to_amount)),    # already positive
                     settle_date=settle,
                 ))
-            # Fee in main (from) currency
-            if fee != ZERO:
+            comm = Decimal(str(tx.commission or tx.fee or 0))
+            if comm != ZERO:
                 impacts.append(CashImpact(
                     currency=tx.currency,
-                    delta=fee,
+                    delta=comm,
                     settle_date=settle,
                 ))
-        # fx_translation: period-end FX P&L adjustment — no cash movement
-        # else: pass
+        # fx_translation: P&L adjustment — no cash
 
-    elif category == "SECURITIES_LENDING":
-        # lending_out / lending_return: no direct cash flow
-        # (collateral tracked separately in cash_collateral table)
-        # lending_income: interest received on collateral — IS a cash inflow
+    # ── LENDING ───────────────────────────────────────────────────────────
+    elif category in ("LENDING", "SECURITIES_LENDING"):
         if tx_type == "lending_income":
-            amount = Decimal(str(tx.amount or 0))
-            net = amount + fee
+            net = _net()
             if net != ZERO:
-                impacts.append(CashImpact(
-                    currency=tx.currency,
-                    delta=net,
-                    settle_date=settle,
-                ))
+                impacts.append(CashImpact(currency=tx.currency, delta=net, settle_date=settle))
+        # lending_out / lending_return: no cash flow
 
+    # ── ACCRUAL ───────────────────────────────────────────────────────────
     elif category == "ACCRUAL":
-        # Accruals affect NAV but do NOT move cash.
-        # NAV adjustment is computed separately via the Accrual table.
-        pass
+        pass  # affects NAV but not cash
+
+    # ── CORPORATE ─────────────────────────────────────────────────────────
+    elif category == "CORPORATE":
+        if tx_type == "rights_issue":
+            net = _net()
+            if net != ZERO:
+                impacts.append(CashImpact(currency=tx.currency, delta=net, settle_date=settle))
+        # stock_split, reverse_split, spinoff, merger: no direct cash
 
     return impacts
 

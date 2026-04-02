@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from calendar import monthrange
 from datetime import date
+
+logger = logging.getLogger(__name__)
 from decimal import Decimal
 from typing import Optional
 
@@ -35,6 +38,8 @@ from app.schemas.common import (
     RateManualRequest,
     SeedCapitalRequest,
     ShareRequest,
+    TransactionCreateRequest,
+    TransactionUpdateRequest,
 )
 from app.services.audit import list_audit_logs, record_audit
 from app.services.auth import (
@@ -1263,6 +1268,12 @@ def list_transactions(
     fund_id: Optional[int] = None,
     account_id: Optional[int] = None,
     trade_date: Optional[date] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    tx_category: Optional[str] = None,
+    tx_type: Optional[str] = None,
+    asset_code: Optional[str] = None,
+    source: Optional[str] = None,
     import_batch_id: Optional[int] = None,
     db: Session = Depends(get_db),
     actor: Actor = Depends(get_actor),
@@ -1276,10 +1287,27 @@ def list_transactions(
         if account:
             query = query.filter(Transaction.account_id == account_id)
     elif actor.role == ROLE_CLIENT_READONLY:
-        # Accounts no longer link to clients; client-scoped users see all transactions
         pass
     if trade_date is not None:
         query = query.filter(Transaction.trade_date == trade_date)
+    if date_from is not None:
+        query = query.filter(Transaction.trade_date >= date_from)
+    if date_to is not None:
+        query = query.filter(Transaction.trade_date <= date_to)
+    if tx_category is not None:
+        # Support legacy aliases: EQUITY→TRADE
+        cats = [tx_category.upper()]
+        if tx_category.upper() == "TRADE":
+            cats.append("EQUITY")
+        elif tx_category.upper() == "EQUITY":
+            cats.append("TRADE")
+        query = query.filter(Transaction.tx_category.in_(cats))
+    if tx_type is not None:
+        query = query.filter(Transaction.tx_type == tx_type.lower())
+    if asset_code is not None:
+        query = query.filter(Transaction.asset_code.ilike(f"%{asset_code}%"))
+    if source is not None:
+        query = query.filter(Transaction.source == source)
     if import_batch_id is not None:
         query = query.filter(Transaction.import_batch_id == import_batch_id)
     return _paginate(query.order_by(Transaction.trade_date.desc(), Transaction.id.desc()), page, size, _serialize_transaction)
@@ -1292,6 +1320,174 @@ def get_transaction(transaction_id: int, db: Session = Depends(get_db), actor: A
     if not item:
         raise HTTPException(status_code=404, detail="Transaction not found.")
     return _serialize_transaction(item)
+
+
+@router.post("/transaction")
+def create_transaction(req: TransactionCreateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """V4.2: Manual transaction entry for all transaction types."""
+    require_permissions(actor, "accounts.write")
+    account = db.query(Account).filter(Account.id == req.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found.")
+
+    tx = Transaction(
+        account_id=req.account_id,
+        tx_category=req.tx_category.upper(),
+        tx_type=req.tx_type.lower(),
+        trade_date=req.trade_date,
+        settle_date=req.settle_date,
+        currency=req.currency.upper(),
+        description=req.description,
+        source=req.source or "manual",
+        # Amount fields
+        gross_amount=req.gross_amount,
+        commission=req.commission,
+        transaction_fee=req.transaction_fee,
+        other_fee=req.other_fee,
+        amount=req.amount,
+        fee=req.fee or 0,
+        # TRADE fields
+        asset_code=req.asset_code.upper() if req.asset_code else None,
+        asset_name=req.asset_name,
+        asset_type=req.asset_type,
+        exchange=req.exchange,
+        isin=req.isin,
+        quantity=req.quantity,
+        price=req.price,
+        realized_pnl=req.realized_pnl,
+        cost_basis=req.cost_basis,
+        # Option fields
+        option_underlying=req.option_underlying,
+        option_expiry=req.option_expiry,
+        option_strike=req.option_strike,
+        option_type=req.option_type,
+        option_multiplier=req.option_multiplier,
+        # FX fields
+        fx_from_currency=req.fx_from_currency,
+        fx_from_amount=req.fx_from_amount,
+        fx_to_currency=req.fx_to_currency,
+        fx_to_amount=req.fx_to_amount,
+        fx_rate=req.fx_rate,
+        # Lending fields
+        lending_asset_code=req.lending_asset_code,
+        lending_quantity=req.lending_quantity,
+        lending_rate_pct=req.lending_rate_pct,
+        collateral_amount=req.collateral_amount,
+        # Accrual fields
+        accrual_type=req.accrual_type,
+        accrual_period_start=req.accrual_period_start,
+        accrual_period_end=req.accrual_period_end,
+        is_accrual_reversal=req.is_accrual_reversal or False,
+        # Corporate fields
+        corporate_ratio=req.corporate_ratio,
+        corporate_new_code=req.corporate_new_code,
+        # Internal transfer
+        counterparty_account=req.counterparty_account,
+        tx_subtype=req.tx_subtype,
+        created_by=actor.user_id if hasattr(actor, "user_id") else None,
+        updated_by=actor.user_id if hasattr(actor, "user_id") else None,
+    )
+    db.add(tx)
+    db.flush()
+
+    # Trigger position recalculation for TRADE transactions
+    if tx.tx_category.upper() in ("TRADE", "EQUITY") and tx.asset_code:
+        try:
+            from app.services.position_calculator import recalculate_position
+            recalculate_position(req.account_id, tx.asset_code, db)
+        except Exception as exc:
+            logger.warning(f"position recalc failed after create: {exc}")
+
+    db.commit()
+    db.refresh(tx)
+    return _serialize_transaction(tx)
+
+
+@router.patch("/transaction/{transaction_id}")
+def update_transaction(transaction_id: int, req: TransactionUpdateRequest, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """V4.2: Edit an existing transaction (admin or ops)."""
+    require_permissions(actor, "accounts.write")
+    tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+
+    old_asset = tx.asset_code
+    fields = req.model_dump(exclude_unset=True)
+    for field, value in fields.items():
+        if field == "tx_category" and value:
+            value = value.upper()
+        elif field == "tx_type" and value:
+            value = value.lower()
+        elif field == "currency" and value:
+            value = value.upper()
+        elif field == "asset_code" and value:
+            value = value.upper()
+        setattr(tx, field, value)
+
+    if hasattr(actor, "user_id"):
+        tx.updated_by = actor.user_id
+
+    db.flush()
+
+    # Trigger position recalculation if asset or category changed
+    affected_assets = {a for a in [old_asset, tx.asset_code] if a}
+    for asset in affected_assets:
+        if tx.tx_category.upper() in ("TRADE", "EQUITY"):
+            try:
+                from app.services.position_calculator import recalculate_position
+                recalculate_position(tx.account_id, asset, db)
+            except Exception as exc:
+                logger.warning(f"position recalc failed after update: {exc}")
+
+    db.commit()
+    db.refresh(tx)
+    return _serialize_transaction(tx)
+
+
+@router.delete("/transaction/{transaction_id}")
+def delete_transaction(transaction_id: int, db: Session = Depends(get_db), actor: Actor = Depends(get_actor)):
+    """V4.2: Delete a transaction (admin only) with protection checks."""
+    require_permissions(actor, "admin")
+    tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+
+    # Protection 1: CSV-imported records must be deleted via batch reset
+    if tx.source == "csv_import" and tx.import_batch_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV导入记录请通过「重置批次」操作删除，不能单条删除。(batch #{tx.import_batch_id})",
+        )
+
+    # Protection 2: Check for locked NAV records after this transaction's date
+    locked_nav = db.query(NAVRecord).filter(
+        NAVRecord.fund_id == db.query(Account.fund_id).filter(Account.id == tx.account_id).scalar_subquery(),
+        NAVRecord.nav_date >= tx.trade_date,
+        NAVRecord.is_locked == True,
+    ).first()
+    if locked_nav:
+        raise HTTPException(
+            status_code=400,
+            detail=f"该交易日期之后存在已锁定NAV记录（{locked_nav.nav_date}），无法删除。请先解锁NAV记录。",
+        )
+
+    account_id = tx.account_id
+    asset_code = tx.asset_code
+    tx_category = tx.tx_category
+
+    db.delete(tx)
+    db.flush()
+
+    # Recalculate position if TRADE
+    if tx_category and tx_category.upper() in ("TRADE", "EQUITY") and asset_code:
+        try:
+            from app.services.position_calculator import recalculate_position
+            recalculate_position(account_id, asset_code, db)
+        except Exception as exc:
+            logger.warning(f"position recalc failed after delete: {exc}")
+
+    db.commit()
+    return {"status": "deleted", "id": transaction_id}
 
 
 @router.post("/transaction/fx")
@@ -1824,8 +2020,18 @@ def _serialize_transaction(item: Transaction) -> dict:
         "accrual_reversal_id": getattr(item, "accrual_reversal_id", None),
         # V4.1: internal transfer
         "counterparty_account": getattr(item, "counterparty_account", None),
+        # V4.2: Securities lending detail
+        "lending_asset_code": getattr(item, "lending_asset_code", None),
+        "lending_quantity": _decimal(getattr(item, "lending_quantity", None)),
+        "lending_rate_pct": _decimal(getattr(item, "lending_rate_pct", None)),
+        # V4.2: Accrual reversal flag
+        "is_accrual_reversal": getattr(item, "is_accrual_reversal", None),
+        # V4.2: Corporate action new code
+        "corporate_new_code": getattr(item, "corporate_new_code", None),
         # Metadata
         "import_batch_id": item.import_batch_id,
+        "created_by": getattr(item, "created_by", None),
+        "updated_by": getattr(item, "updated_by", None),
         "created_at": _iso(item.created_at),
         "updated_at": _iso(item.updated_at),
     }

@@ -210,10 +210,68 @@ export type Transaction = {
   accrual_reversal_id?: number | null;
   // V4.1: internal transfer
   counterparty_account?: string | null;
+  // V4.2: lending detail
+  lending_asset_code?: string | null;
+  lending_quantity?: number | null;
+  lending_rate_pct?: number | null;
+  // V4.2: accrual reversal flag
+  is_accrual_reversal?: boolean | null;
+  // V4.2: corporate new code
+  corporate_new_code?: string | null;
   // Metadata
   import_batch_id?: number | null;
+  created_by?: number | null;
+  updated_by?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export type TransactionCreateRequest = {
+  account_id: number;
+  tx_category: string;
+  tx_type: string;
+  trade_date: string;
+  currency: string;
+  settle_date?: string | null;
+  description?: string | null;
+  source?: string;
+  gross_amount?: number | null;
+  commission?: number | null;
+  transaction_fee?: number | null;
+  other_fee?: number | null;
+  amount?: number | null;
+  fee?: number | null;
+  asset_code?: string | null;
+  asset_name?: string | null;
+  asset_type?: string | null;
+  exchange?: string | null;
+  isin?: string | null;
+  quantity?: number | null;
+  price?: number | null;
+  realized_pnl?: number | null;
+  cost_basis?: number | null;
+  option_underlying?: string | null;
+  option_expiry?: string | null;
+  option_strike?: number | null;
+  option_type?: string | null;
+  option_multiplier?: number | null;
+  fx_from_currency?: string | null;
+  fx_from_amount?: number | null;
+  fx_to_currency?: string | null;
+  fx_to_amount?: number | null;
+  fx_rate?: number | null;
+  lending_asset_code?: string | null;
+  lending_quantity?: number | null;
+  lending_rate_pct?: number | null;
+  collateral_amount?: number | null;
+  accrual_type?: string | null;
+  accrual_period_start?: string | null;
+  accrual_period_end?: string | null;
+  is_accrual_reversal?: boolean | null;
+  corporate_ratio?: number | null;
+  corporate_new_code?: string | null;
+  counterparty_account?: string | null;
+  tx_subtype?: string | null;
 };
 
 export type FXSummary = {
@@ -706,8 +764,31 @@ export async function getPositions(params?: { page?: number; size?: number; fund
   return fetchJson<ApiListResponse<Position>>(`/position${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`, { accessToken: params?.accessToken });
 }
 
-export async function getTransactions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; accessToken?: string | null }) {
-  return fetchJson<ApiListResponse<Transaction>>(`/transaction${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId })}`, { accessToken: params?.accessToken });
+export async function getTransactions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; txCategory?: string; txType?: string; assetCode?: string; source?: string; dateFrom?: string; dateTo?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<Transaction>>(`/transaction${buildQuery({
+    page: params?.page ?? 1,
+    size: params?.size ?? 100,
+    fund_id: params?.fundId,
+    account_id: params?.accountId,
+    tx_category: params?.txCategory,
+    tx_type: params?.txType,
+    asset_code: params?.assetCode,
+    source: params?.source,
+    date_from: params?.dateFrom,
+    date_to: params?.dateTo,
+  })}`, { accessToken: params?.accessToken });
+}
+
+export async function createTransaction(data: TransactionCreateRequest, accessToken?: string | null) {
+  return fetchJson<Transaction>('/transaction', { method: 'POST', body: JSON.stringify(data), accessToken });
+}
+
+export async function updateTransaction(id: number, data: Partial<TransactionCreateRequest>, accessToken?: string | null) {
+  return fetchJson<Transaction>(`/transaction/${id}`, { method: 'PATCH', body: JSON.stringify(data), accessToken });
+}
+
+export async function deleteTransaction(id: number, accessToken?: string | null) {
+  return fetchJson<{ status: string; id: number }>(`/transaction/${id}`, { method: 'DELETE', accessToken });
 }
 
 export async function getCustomerView(clientId: number, accessToken?: string | null) {

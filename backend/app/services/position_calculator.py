@@ -214,6 +214,140 @@ def calc_all_positions(
     return results
 
 
+def recalculate_position(account_id: int, asset_code: str, db: Session) -> dict:
+    """
+    V4.2: Replay ALL TRADE transactions for (account, asset) from the beginning.
+
+    - Writes year-end Position checkpoints to the Position table.
+    - Auto-fills tx.realized_pnl on sell transactions (if not already set).
+    - Returns {quantity: float, average_cost: float} for the current state.
+    - Handles both legacy tx_types (buy/sell) and v4.2 types (stock_buy/stock_sell).
+    """
+    _BUY = {"stock_buy", "buy", "option_buy", "buy_option", "option_exercise", "rights_issue"}
+    _SELL = {"stock_sell", "sell", "option_sell", "sell_option"}
+    _EXPIRE = {"option_expire"}
+    _SPLIT = {"stock_split", "reverse_split"}
+
+    txns = (
+        db.query(Transaction)
+        .filter(
+            Transaction.account_id == account_id,
+            Transaction.asset_code == asset_code,
+            Transaction.tx_category.in_(["TRADE", "EQUITY"]),
+        )
+        .order_by(Transaction.trade_date, Transaction.id)
+        .all()
+    )
+
+    qty = ZERO
+    cost = ZERO
+    checkpoints: dict[int, dict] = {}
+    currency = "USD"
+
+    for tx in txns:
+        if tx.currency:
+            currency = tx.currency
+        tx_type = (tx.tx_type or "").lower()
+        quantity = abs(Decimal(str(tx.quantity or 0)))
+        price = Decimal(str(tx.price or 0))
+        commission = abs(Decimal(str(tx.commission or tx.fee or 0)))
+
+        if tx_type in _BUY:
+            cost += quantity * price + commission
+            qty += quantity
+
+        elif tx_type in _SELL:
+            wavg = (cost / qty) if qty > ZERO else ZERO
+            realized = quantity * (price - wavg)
+            if tx.realized_pnl is None:
+                tx.realized_pnl = float(realized)
+            cost -= quantity * wavg
+            qty -= quantity
+            if qty < Decimal("0.000001"):
+                qty = ZERO
+                cost = ZERO
+
+        elif tx_type in _EXPIRE:
+            if qty > ZERO:
+                wavg = cost / qty
+                cost -= quantity * wavg
+            qty = max(qty - quantity, ZERO)
+
+        elif tx_type == "stock_split":
+            ratio = Decimal(str(tx.corporate_ratio or 1))
+            qty = qty * ratio
+
+        elif tx_type == "reverse_split":
+            ratio = Decimal(str(tx.corporate_ratio or 1))
+            if ratio > ZERO:
+                qty = qty / ratio
+
+        wavg = (cost / qty) if qty > ZERO else ZERO
+        year = tx.trade_date.year
+        checkpoints[year] = {
+            "quantity": float(qty),
+            "average_cost": float(wavg),
+            "snapshot_date": date(year, 12, 31),
+            "currency": currency,
+        }
+
+    db.flush()
+
+    for cp in checkpoints.values():
+        _upsert_position_v42(account_id, asset_code, cp, db)
+
+    db.commit()
+
+    wavg = float((cost / qty) if qty > ZERO else ZERO)
+    return {"quantity": float(qty), "average_cost": wavg}
+
+
+def _upsert_position_v42(account_id: int, asset_code: str, cp: dict, db: Session):
+    snap = cp["snapshot_date"]
+    existing = (
+        db.query(Position)
+        .filter(
+            Position.account_id == account_id,
+            Position.asset_code == asset_code,
+            Position.snapshot_date == snap,
+        )
+        .first()
+    )
+    if existing:
+        existing.quantity = cp["quantity"]
+        existing.average_cost = cp["average_cost"]
+        existing.currency = cp.get("currency", existing.currency)
+    else:
+        db.add(Position(
+            account_id=account_id,
+            asset_code=asset_code,
+            quantity=cp["quantity"],
+            average_cost=cp["average_cost"],
+            snapshot_date=snap,
+            currency=cp.get("currency", "USD"),
+        ))
+
+
+def recalculate_all_positions(account_id: int, db: Session) -> list[dict]:
+    """Recalculate all positions for an account. Called after bulk CSV import."""
+    rows = (
+        db.query(Transaction.asset_code)
+        .filter(
+            Transaction.account_id == account_id,
+            Transaction.asset_code.isnot(None),
+            Transaction.tx_category.in_(["TRADE", "EQUITY"]),
+        )
+        .distinct()
+        .all()
+    )
+    results = []
+    for (asset_code,) in rows:
+        r = recalculate_position(account_id, asset_code, db)
+        r["asset_code"] = asset_code
+        results.append(r)
+    return results
+
+
 def get_realized_pnl(
     account_id: int,
     asset_code: str,

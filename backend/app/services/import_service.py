@@ -203,17 +203,25 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
 
     for item in trade_rows:
         tx_type_lower = (item["tx_type"] or "").lower()
-        # V4.1: Extended category routing
-        if tx_type_lower in ("forex_buy", "forex_sell", "fx_translation"):
+        # V4.2: Extended category routing (TRADE replaces EQUITY)
+        if tx_type_lower in ("forex_buy", "forex_sell", "fx_translation", "fx_trade", "fx"):
             tx_category = "FX"
         elif tx_type_lower in _ACCRUAL_TX_TYPES:
             tx_category = "ACCRUAL"
-        elif tx_type_lower in _SECURITIES_LENDING_TX_TYPES:
-            tx_category = "SECURITIES_LENDING"
-        elif tx_type_lower in _CASH_TX_TYPES:
+        elif tx_type_lower in (_SECURITIES_LENDING_TX_TYPES | {"lending_income"}):
+            tx_category = "LENDING"
+        elif tx_type_lower in _CASH_TX_TYPES or tx_type_lower in (
+            "deposit_eft", "deposit_transfer", "withdrawal", "dividend", "pil",
+            "dividend_fee", "interest_debit", "interest_credit", "adr_fee",
+            "other_fee", "adjustment", "lending_income",
+        ):
             tx_category = "CASH"
+        elif tx_type_lower in ("stock_buy", "stock_sell", "option_buy", "option_sell",
+                               "option_expire", "option_exercise",
+                               "stock_split", "reverse_split", "rights_issue", "spinoff", "merger"):
+            tx_category = "TRADE"
         else:
-            tx_category = "EQUITY"
+            tx_category = "TRADE"  # default (was EQUITY)
 
         def _opt_decimal(val: Any) -> Optional[Decimal]:
             if val is None or val == "":
@@ -293,6 +301,15 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
     batch.confirmed_count = len(trade_rows)
     batch.failed_reason = None
     db.commit()
+
+    # V4.2: Trigger position recalculation for all TRADE assets in this batch
+    try:
+        from app.services.position_calculator import recalculate_all_positions
+        recalculate_all_positions(batch.account_id, db)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(f"position recalc after import failed: {exc}")
+
     db.refresh(batch)
     return batch
 
@@ -416,12 +433,16 @@ def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> lis
     for item in sorted(preview_rows, key=lambda row: (row["snapshot_date"], row["trade_date"], row["row_number"], row.get("asset_code", ""))):
         # Skip forex/cash/deposit/accrual/lending rows — they don't create stock positions
         tx_t = item["tx_type"]
-        if (tx_t in FOREX_CASH_TX_TYPES
-                or tx_t == DEPOSIT_PENDING_TX_TYPE
-                or tx_t in _CASH_TX_TYPES
-                or tx_t in _ACCRUAL_TX_TYPES
-                or tx_t in _SECURITIES_LENDING_TX_TYPES
-                or tx_t == "fx_translation"):
+        _NON_TRADE = (
+            FOREX_CASH_TX_TYPES | _CASH_TX_TYPES | _ACCRUAL_TX_TYPES | _SECURITIES_LENDING_TX_TYPES
+            | {DEPOSIT_PENDING_TX_TYPE, "fx_translation", "fx_trade", "fx",
+               "deposit_eft", "deposit_transfer", "withdrawal", "dividend", "pil",
+               "dividend_fee", "interest_debit", "interest_credit", "adr_fee",
+               "other_fee", "adjustment", "lending_income",
+               "interest_accrual", "dividend_accrual", "interest_accrual_reversal",
+               "dividend_accrual_reversal"}
+        )
+        if (tx_t in _NON_TRADE):
             continue
         position_key = (item["asset_code"], item["currency"])
         state = position_state[position_key]
