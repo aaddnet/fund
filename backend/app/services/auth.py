@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_db
-from app.models import AuthSession, AuthUser, Client
+from app.models import AuthSession, AuthUser
 
 ROLE_ADMIN = "admin"
 ROLE_OPS = "ops"
@@ -262,13 +262,8 @@ def _revoke_refresh_family(db: Session, refresh_family_id: Optional[str], *, rea
 
 
 def _validate_client_scope(db: Session, role: str, client_scope_id: Optional[int]) -> Optional[int]:
-    if role == ROLE_CLIENT_READONLY and client_scope_id is None:
-        raise HTTPException(status_code=400, detail="client-readonly requires client scope")
-    if client_scope_id is not None:
-        client_exists = db.query(Client.id).filter(Client.id == client_scope_id).first()
-        if not client_exists:
-            raise HTTPException(status_code=400, detail="client scope does not exist")
-    return client_scope_id
+    # v1: client scope is not used (no client/LP concept)
+    return None
 
 
 def list_auth_users(db: Session) -> list[AuthUser]:
@@ -381,18 +376,11 @@ def bootstrap_auth_users(db: Session) -> None:
         username = str(item.get("username", "")).strip()
         password = str(item.get("password", "")).strip()
         role = str(item.get("role", "")).strip().lower()
-        requested_client_scope_id = item.get("client_scope_id")
         if not username or not password or role not in ALLOWED_ROLES:
             continue
-        client_scope_id = requested_client_scope_id
-        if requested_client_scope_id is not None:
-            client_exists = db.query(Client.id).filter(Client.id == requested_client_scope_id).first()
-            client_scope_id = requested_client_scope_id if client_exists else None
 
         existing = db.query(AuthUser).filter(AuthUser.username == username).first()
         if existing:
-            if existing.client_scope_id is None and client_scope_id is not None:
-                existing.client_scope_id = client_scope_id
             if existing.password_changed_at is None:
                 existing.password_changed_at = existing.created_at or _utcnow()
             db.commit()
@@ -402,7 +390,6 @@ def bootstrap_auth_users(db: Session) -> None:
                 username=username,
                 password_hash=hash_password(password),
                 role=role,
-                client_scope_id=client_scope_id,
                 display_name=item.get("display_name") or username,
                 is_active=True,
                 password_changed_at=_utcnow(),

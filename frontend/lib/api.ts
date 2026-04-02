@@ -45,27 +45,6 @@ export type ApiListResponse<T> = {
   pagination: Pagination;
 };
 
-export type Fund = {
-  id: number;
-  name: string;
-  base_currency: string;
-  total_shares: number;
-  fund_code?: string | null;
-  inception_date?: string | null;
-  first_capital_date?: string | null;
-  fund_type?: string | null;
-  status?: string | null;
-  hurdle_rate?: number | null;
-  perf_fee_rate?: number | null;
-  perf_fee_frequency?: string | null;
-  subscription_cycle?: string | null;
-  nav_decimal?: number;
-  share_decimal?: number;
-  description?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
 export type CashPosition = {
   id: number;
   account_id: number;
@@ -77,52 +56,8 @@ export type CashPosition = {
   updated_at?: string | null;
 };
 
-export type ShareRegisterEntry = {
-  id: number;
-  fund_id: number;
-  client_id: number;
-  event_date: string;
-  event_type: string;
-  shares_delta: number;
-  shares_after: number;
-  nav_per_share: number;
-  amount_usd?: number | null;
-  ref_share_tx_id?: number | null;
-  note?: string | null;
-  created_at?: string | null;
-};
-
-export type CapitalAccount = {
-  id: number;
-  fund_id: number;
-  client_id: number;
-  total_invested_usd: number;
-  total_redeemed_usd: number;
-  avg_cost_nav?: number | null;
-  current_shares: number;
-  unrealized_pnl_usd?: number | null;
-  last_updated_date?: string | null;
-};
-
-export type Client = {
-  id: number;
-  name: string;
-  email?: string | null;
-  account_count?: number;
-  fund_count?: number;
-  fund_ids?: number[];
-  total_share_balance?: number;
-  total_holding_value_usd?: number | null;
-  holding_currency?: string | null;
-  share_tx_count?: number;
-  latest_trade_date?: string | null;
-  latest_share_tx_date?: string | null;
-};
-
 export type Account = {
   id: number;
-  fund_id: number;
-  fund_name?: string | null;
   holder_name?: string | null;
   broker: string;
   account_no: string;
@@ -303,46 +238,11 @@ export type CashBalances = {
 
 export type NavRecord = {
   id: number;
-  fund_id: number;
-  fund_name?: string | null;
   nav_date: string;
   total_assets_usd: number;
   total_shares: number;
   nav_per_share: number;
   is_locked: boolean;
-};
-
-export type ShareTransaction = {
-  id: number;
-  fund_id: number;
-  client_id: number;
-  tx_date: string;
-  tx_type: string;
-  amount_usd: number;
-  shares: number;
-  nav_at_date: number;
-};
-
-export type ShareBalance = {
-  fund_id: number;
-  client_id: number;
-  share_balance: number;
-};
-
-export type FeeRecord = {
-  id: number;
-  fund_id: number;
-  fee_date: string;
-  gross_return: number;
-  fee_rate: number;
-  fee_amount_usd: number;
-  nav_start?: number | null;
-  nav_end_before_fee?: number | null;
-  annual_return_pct?: number | null;
-  excess_return_pct?: number | null;
-  fee_base_usd?: number | null;
-  nav_after_fee?: number | null;
-  applied_date?: string | null;
 };
 
 export type ImportPreviewRow = {
@@ -443,93 +343,6 @@ export type ImportBatch = {
   pending_deposits?: PendingDeposit[];
 };
 
-export type CustomerView = {
-  client: Client;
-  accounts: Account[];
-  share_balances: ShareBalance[];
-  share_history: ShareTransaction[];
-  nav_history: NavRecord[];
-};
-
-export type ReportBreakdownRow = {
-  key: string | number;
-  share_tx_count: number;
-  subscription_amount_usd: number;
-  redemption_amount_usd: number;
-  net_share_flow_usd: number;
-  shares_delta: number;
-  latest_tx_date?: string | null;
-};
-
-export type ReportTransactionAssetRow = {
-  asset_code: string;
-  transaction_count: number;
-  gross_notional_estimate: number;
-  latest_trade_date?: string | null;
-};
-
-export type ReportNavByFundRow = {
-  fund_id: number;
-  latest_nav_date?: string | null;
-  latest_nav_per_share: number;
-  latest_total_assets_usd: number;
-  record_count: number;
-};
-
-export type ReportShareFlowSeriesRow = {
-  date: string;
-  subscription_amount_usd: number;
-  redemption_amount_usd: number;
-  net_share_flow_usd: number;
-  share_tx_count: number;
-};
-
-export type ReportNavSeriesRow = {
-  date: string;
-  fund_id: number;
-  nav_per_share: number;
-  total_assets_usd: number;
-};
-
-export type ReportOverview = {
-  filters: {
-    period_type: 'month' | 'quarter' | 'year' | string;
-    period_value: string;
-    date_from: string;
-    date_to: string;
-    fund_id?: number | null;
-    client_id?: number | null;
-    tx_type?: string | null;
-  };
-  summary: {
-    share_tx_count: number;
-    subscription_amount_usd: number;
-    redemption_amount_usd: number;
-    net_share_flow_usd: number;
-    nav_record_count: number;
-    fee_record_count: number;
-    transaction_count: number;
-    fund_count: number;
-    client_count: number;
-    avg_nav_per_share: number;
-    latest_nav_date?: string | null;
-  };
-  share_history: ShareTransaction[];
-  nav_records: NavRecord[];
-  fee_records: FeeRecord[];
-  transactions: Transaction[];
-  breakdowns: {
-    by_fund: ReportBreakdownRow[];
-    by_client: ReportBreakdownRow[];
-    by_tx_type: ReportBreakdownRow[];
-    transactions_by_asset: ReportTransactionAssetRow[];
-    nav_by_fund: ReportNavByFundRow[];
-  };
-  series: {
-    share_flow_by_date: ReportShareFlowSeriesRow[];
-    nav_trend: ReportNavSeriesRow[];
-  };
-};
 
 type FetchOptions = RequestInit & {
   accessToken?: string | null;
@@ -708,20 +521,8 @@ export async function getHealthDb(accessToken?: string | null) {
   return fetchJson<{ db: string }>('/health/db', { accessToken });
 }
 
-export async function getNav(fundId?: number, accessToken?: string | null) {
-  return fetchJson<NavRecord[]>(`/nav${buildQuery({ fund_id: fundId })}`, { accessToken });
-}
-
-export async function getShareHistory(params?: { fundId?: number; clientId?: number; txType?: string; dateFrom?: string; dateTo?: string; accessToken?: string | null }) {
-  return fetchJson<ShareTransaction[]>(`/share/history${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId, tx_type: params?.txType, date_from: params?.dateFrom, date_to: params?.dateTo })}`, { accessToken: params?.accessToken });
-}
-
-export async function getShareBalances(params?: { fundId?: number; clientId?: number; accessToken?: string | null }) {
-  return fetchJson<ShareBalance[]>(`/share/balances${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId })}`, { accessToken: params?.accessToken });
-}
-
-export async function getFees(accessToken?: string | null) {
-  return fetchJson<FeeRecord[]>('/fee', { accessToken });
+export async function getNav(accessToken?: string | null) {
+  return fetchJson<NavRecord[]>('/nav', { accessToken });
 }
 
 export async function getImportBatches(params?: { accountId?: number; accessToken?: string | null }) {
@@ -732,43 +533,22 @@ export async function getImportBatch(batchId: number, accessToken?: string | nul
   return fetchJson<ImportBatch>(`/import/${batchId}`, { accessToken });
 }
 
-export async function getFunds(page = 1, size = 50, accessToken?: string | null) {
-  return fetchJson<ApiListResponse<Fund>>(`/fund${buildQuery({ page, size })}`, { accessToken });
-}
-
-export async function createFund(data: { name: string; base_currency?: string; total_shares?: number }) {
-  return fetchJson<Fund>('/fund', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function updateFund(fundId: number, data: { name?: string; base_currency?: string; total_shares?: number; [key: string]: any }) {
-  return fetchJson<Fund>(`/fund/${fundId}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function getClients(params?: { page?: number; size?: number; fundId?: number; q?: string; accessToken?: string | null }) {
-  return fetchJson<ApiListResponse<Client>>(`/client${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, q: params?.q })}`, { accessToken: params?.accessToken });
-}
-
-export async function getClient(clientId: number, accessToken?: string | null) {
-  return fetchJson<Client>(`/client/${clientId}`, { accessToken });
-}
-
-export async function getAccounts(params?: { page?: number; size?: number; fundId?: number; holder?: string; broker?: string; q?: string; accessToken?: string | null }) {
-  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, fund_id: params?.fundId, holder: params?.holder, broker: params?.broker, q: params?.q })}`, { accessToken: params?.accessToken });
+export async function getAccounts(params?: { page?: number; size?: number; holder?: string; broker?: string; q?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<Account>>(`/account${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 50, holder: params?.holder, broker: params?.broker, q: params?.q })}`, { accessToken: params?.accessToken });
 }
 
 export async function getAccount(accountId: number, accessToken?: string | null) {
   return fetchJson<Account>(`/account/${accountId}`, { accessToken });
 }
 
-export async function getPositions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; snapshotDate?: string; accessToken?: string | null }) {
-  return fetchJson<ApiListResponse<Position>>(`/position${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, fund_id: params?.fundId, account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`, { accessToken: params?.accessToken });
+export async function getPositions(params?: { page?: number; size?: number; accountId?: number; snapshotDate?: string; accessToken?: string | null }) {
+  return fetchJson<ApiListResponse<Position>>(`/position${buildQuery({ page: params?.page ?? 1, size: params?.size ?? 100, account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`, { accessToken: params?.accessToken });
 }
 
-export async function getTransactions(params?: { page?: number; size?: number; fundId?: number; accountId?: number; txCategory?: string; txType?: string; assetCode?: string; source?: string; dateFrom?: string; dateTo?: string; accessToken?: string | null }) {
+export async function getTransactions(params?: { page?: number; size?: number; accountId?: number; txCategory?: string; txType?: string; assetCode?: string; source?: string; dateFrom?: string; dateTo?: string; accessToken?: string | null }) {
   return fetchJson<ApiListResponse<Transaction>>(`/transaction${buildQuery({
     page: params?.page ?? 1,
     size: params?.size ?? 100,
-    fund_id: params?.fundId,
     account_id: params?.accountId,
     tx_category: params?.txCategory,
     tx_type: params?.txType,
@@ -791,14 +571,6 @@ export async function deleteTransaction(id: number, accessToken?: string | null)
   return fetchJson<{ status: string; id: number }>(`/transaction/${id}`, { method: 'DELETE', accessToken });
 }
 
-export async function getCustomerView(clientId: number, accessToken?: string | null) {
-  return fetchJson<CustomerView>(`/customer/${clientId}`, { accessToken });
-}
-
-export async function getReportOverview(params: { periodType: string; periodValue: string; fundId?: number; clientId?: number; txType?: string; accessToken?: string | null }) {
-  return fetchJson<ReportOverview>(`/reports/overview${buildQuery({ period_type: params.periodType, period_value: params.periodValue, fund_id: params.fundId, client_id: params.clientId, tx_type: params.txType })}`, { accessToken: params.accessToken });
-}
-
 export async function uploadImportBatch(payload: { source: string; accountId: number; file: File; force?: boolean }) {
   const formData = new FormData();
   formData.append('source', payload.source);
@@ -817,7 +589,7 @@ export async function confirmImportBatch(batchId: number) {
   });
 }
 
-export async function createNav(payload: { fund_id: number; nav_date: string; force?: boolean }) {
+export async function createNav(payload: { nav_date: string; force?: boolean }) {
   return fetchJson<NavRecord>('/nav/calc', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -832,76 +604,18 @@ export async function getPendingDeposits(batchId: number): Promise<PendingDeposi
   return fetchJson<PendingDeposit[]>(`/import/${batchId}/pending-deposits`);
 }
 
-export async function confirmDeposit(batchId: number, payload: { deposit_index: number; client_id?: number | null; confirm_as: string; note?: string }) {
-  return fetchJson<ImportBatch>(`/import/${batchId}/confirm-deposit`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
 export async function resetImportBatch(batchId: number) {
   return fetchJson<ImportBatch>(`/import/${batchId}/reset`, { method: 'POST' });
 }
 
-export type NavRebuildResult = {
-  date: string;
-  nav_per_share?: number;
-  total_assets_usd?: number;
-  status: string;
-  msg?: string;
-};
-
-export async function rebuildNavBatch(payload: { fund_id: number; start_date: string; end_date: string; frequency: string; force?: boolean }) {
-  return fetchJson<{ fund_id: number; results: NavRebuildResult[] }>('/nav/rebuild-batch', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function createShareSubscription(payload: { fund_id: number; client_id: number; tx_date: string; amount_usd: number }) {
-  return fetchJson<ShareTransaction>('/share/subscribe', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function createShareRedemption(payload: { fund_id: number; client_id: number; tx_date: string; amount_usd: number }) {
-  return fetchJson<ShareTransaction>('/share/redeem', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function updateShareTransaction(txId: number, data: Record<string, any>) {
-  return fetchJson<ShareTransaction>(`/share/transaction/${txId}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteShareTransaction(txId: number) {
-  return fetchJson<void>(`/share/transaction/${txId}`, { method: 'DELETE' });
-}
-
-export async function createClient(payload: { name: string; email?: string | null }) {
-  return fetchJson<Client>('/client', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function updateClient(clientId: number, payload: { name?: string | null; email?: string | null }) {
-  return fetchJson<Client>(`/client/${clientId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function createAccount(payload: { fund_id: number; holder_name?: string; broker: string; account_no: string }) {
+export async function createAccount(payload: { holder_name?: string; broker: string; account_no: string }) {
   return fetchJson<Account>('/account', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
 }
 
-export async function updateAccount(accountId: number, payload: { fund_id?: number | null; holder_name?: string | null; broker?: string | null; account_no?: string | null }) {
+export async function updateAccount(accountId: number, payload: { holder_name?: string | null; broker?: string | null; account_no?: string | null }) {
   return fetchJson<Account>(`/account/${accountId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
@@ -932,8 +646,8 @@ export async function changeMyPassword(data: { current_password: string; new_pas
   return fetchJson<AuthUser>('/auth/me/password', { method: 'PATCH', body: JSON.stringify(data) });
 }
 
-export async function getCashPositions(params?: { fundId?: number; accountId?: number; snapshotDate?: string; accessToken?: string | null }) {
-  return fetchJson<CashPosition[]>(`/cash${buildQuery({ fund_id: params?.fundId, account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`, { accessToken: params?.accessToken });
+export async function getCashPositions(params?: { accountId?: number; snapshotDate?: string; accessToken?: string | null }) {
+  return fetchJson<CashPosition[]>(`/cash${buildQuery({ account_id: params?.accountId, snapshot_date: params?.snapshotDate })}`, { accessToken: params?.accessToken });
 }
 
 export async function upsertCashPosition(payload: { account_id: number; currency: string; amount: number; snapshot_date: string; note?: string | null }) {
@@ -985,30 +699,6 @@ export async function getNavBreakdown(accountId: number, asOfDate?: string, acce
   return fetchJson<NavBreakdown>(`/account/${accountId}/nav-breakdown${q}`, { accessToken });
 }
 
-export async function getShareRegister(params?: { fundId?: number; clientId?: number; accessToken?: string | null }) {
-  return fetchJson<ShareRegisterEntry[]>(`/share/register${buildQuery({ fund_id: params?.fundId, client_id: params?.clientId })}`, { accessToken: params?.accessToken });
-}
-
-export async function updateShareRegisterEntry(entryId: number, data: Record<string, any>) {
-  return fetchJson<ShareRegisterEntry>(`/share/register/${entryId}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteShareRegisterEntry(entryId: number) {
-  return fetchJson<void>(`/share/register/${entryId}`, { method: 'DELETE' });
-}
-
-export async function getClientCapitalAccounts(clientId: number, accessToken?: string | null) {
-  return fetchJson<CapitalAccount[]>(`/client/${clientId}/capital-account`, { accessToken });
-}
-
-export async function createSeedCapital(fundId: number, payload: { client_id?: number; amount_usd: number; seed_date: string; shares_override?: number }) {
-  return fetchJson<{ fund_id: number; client_id: number | null; shares_issued: number; nav_per_share: number; amount_usd: number; seed_date: string }>(`/fund/${fundId}/seed`, { method: 'POST', body: JSON.stringify(payload) });
-}
-
-export async function activateFund(fundId: number) {
-  return fetchJson<Fund>(`/fund/${fundId}/activate`, { method: 'POST' });
-}
-
 // --- Exchange Rate ---
 
 export type ExchangeRate = {
@@ -1038,10 +728,6 @@ export async function importRatesCsv(file: File) {
   return fetchJson<{ imported: number }>('/rates/csv', { method: 'POST', body: fd });
 }
 
-export async function checkNavRates(fundId: number, navDate: string, accessToken?: string | null) {
-  return fetchJson<{ ready: boolean; missing_rates: string[]; assets_affected: string[] }>(`/nav/check-rates${buildQuery({ fund_id: fundId, nav_date: navDate })}`, { accessToken });
-}
-
 // --- Asset Price ---
 
 export type AssetPrice = {
@@ -1064,72 +750,6 @@ export async function importPricesCsv(file: File) {
   const fd = new FormData();
   fd.append('file', file);
   return fetchJson<{ imported: number }>('/price/csv', { method: 'POST', body: fd });
-}
-
-// --- PDF Import ---
-
-export type ValidationItem = {
-  asset_code: string;
-  ai_quantity: number;
-  db_quantity?: number;
-  diff_pct?: number;
-  level: 'error' | 'warning' | 'new';
-};
-
-export type ValidationResult = {
-  errors: ValidationItem[];
-  warnings: ValidationItem[];
-  new_positions: ValidationItem[];
-  can_auto_confirm: boolean;
-  summary: { total: number; matched: number; warnings: number; errors: number; new: number };
-};
-
-export type PdfImportBatchRecord = {
-  id: number;
-  account_id: number;
-  snapshot_date: string;
-  filename?: string | null;
-  status: string;
-  failed_reason?: string | null;
-  ai_model?: string | null;
-  parsed_data?: Record<string, any>;
-  confirmed_data?: Record<string, any>;
-  pending_deposits?: any[];
-  validation?: ValidationResult | null;
-  created_at?: string | null;
-};
-
-export async function listPdfBatches(params?: { accountId?: number; accessToken?: string | null }) {
-  return fetchJson<ApiListResponse<PdfImportBatchRecord>>(`/pdf-import${buildQuery({ account_id: params?.accountId, size: 100 })}`, { accessToken: params?.accessToken });
-}
-
-export async function getPdfBatch(batchId: number, accessToken?: string | null) {
-  return fetchJson<PdfImportBatchRecord>(`/pdf-import/${batchId}`, { accessToken });
-}
-
-export async function uploadPdfBatch(payload: { accountId: number; snapshotDate: string; file: File }) {
-  const fd = new FormData();
-  fd.append('account_id', String(payload.accountId));
-  fd.append('snapshot_date', payload.snapshotDate);
-  fd.append('file', payload.file);
-  return fetchJson<PdfImportBatchRecord>('/pdf-import/upload', { method: 'POST', body: fd });
-}
-
-export async function confirmPdfBatch(batchId: number, confirmedData?: Record<string, any>) {
-  return fetchJson<PdfImportBatchRecord>(`/pdf-import/${batchId}/confirm`, {
-    method: 'POST',
-    body: JSON.stringify({ confirmed_data: confirmedData ?? null }),
-  });
-}
-
-export async function resetPdfBatch(batchId: number) {
-  return fetchJson<PdfImportBatchRecord>(`/pdf-import/${batchId}`, { method: 'DELETE' });
-}
-
-// --- SHR-02: Share transaction undo ---
-
-export async function deleteShareTx(shareTxId: number) {
-  return fetchJson<{ deleted: boolean }>(`/shares/${shareTxId}`, { method: 'DELETE' });
 }
 
 export { API_BASE, PUBLIC_API_BASE, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, LOCALE_COOKIE, buildQuery, fetchJson };

@@ -162,9 +162,8 @@ export default function Page({ account, positions, transactions, imports, cashPo
               {account.broker} · {account.account_no}
             </h2>
             <div style={{ color: colors.muted, fontSize: 13 }}>
-              {t('fund')}: <strong>{account.fund_name || `#${account.fund_id}`}</strong>
-              {account.holder_name && <> · {t('accountHolder')}: <strong>{account.holder_name}</strong></>}
-              {' · '}ID: #{account.id}
+              {account.holder_name && <>{t('accountHolder')}: <strong>{account.holder_name}</strong> · </>}
+              ID: #{account.id}
             </div>
             <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               {account.is_margin && (

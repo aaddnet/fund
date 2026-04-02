@@ -1,3 +1,12 @@
+"""
+Investment Portfolio Tracker — Data Models (v1)
+
+Tables:
+  account, transaction, position, cash_position,
+  import_batch, asset_price, exchange_rate,
+  nav_record, asset_snapshot,
+  auth_user, auth_session, audit_log, scheduler_job_run
+"""
 import json
 
 from sqlalchemy import (
@@ -23,240 +32,138 @@ class TimestampMixin:
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
-class Fund(Base, TimestampMixin):
-    __tablename__ = "fund"
-    id = Column(Integer, primary_key=True)
-    name = Column(String(255), nullable=False)
-    base_currency = Column(String(10), nullable=False, default="USD")
-    total_shares = Column(Numeric(20, 6), nullable=False, default=0)
-    fund_code = Column(String(20))
-    inception_date = Column(Date)
-    first_capital_date = Column(Date)
-    fund_type = Column(String(50), nullable=False, default="private_equity")
-    status = Column(String(20), nullable=False, default="draft")
-    hurdle_rate = Column(Numeric(8, 4))
-    perf_fee_rate = Column(Numeric(8, 4))
-    perf_fee_frequency = Column(String(20))
-    subscription_cycle = Column(String(20))
-    nav_decimal = Column(Integer, nullable=False, default=6)
-    share_decimal = Column(Integer, nullable=False, default=6)
-    description = Column(Text)
-
-
-class Client(Base, TimestampMixin):
-    __tablename__ = "client"
-    id = Column(Integer, primary_key=True)
-    name = Column(String(255), nullable=False)
-    email = Column(String(255))
-
+# ── Portfolio Core ────────────────────────────────────────────────────────
 
 class Account(Base, TimestampMixin):
     __tablename__ = "account"
     __table_args__ = (
-        UniqueConstraint("fund_id", "account_no", name="uq_account_fund_account_no"),
+        UniqueConstraint("broker", "account_no", name="uq_account_broker_account_no"),
     )
     id = Column(Integer, primary_key=True)
-    fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
     holder_name = Column(String(200))
     broker = Column(String(100), nullable=False)
     account_no = Column(String(100), nullable=False)
-    # V4.1: IB multi-currency margin account fields
     base_currency = Column(String(10), nullable=True, default="USD")
-    account_capabilities = Column(String(50), nullable=True)  # Margin / Cash / Portfolio Margin
+    account_capabilities = Column(String(50), nullable=True)
     is_margin = Column(Boolean, nullable=True, default=False)
-    master_account_no = Column(String(50), nullable=True)  # IB托管账户上级账号
-    ib_account_no = Column(String(50), nullable=True)      # IB账号如 U8312308
+    master_account_no = Column(String(50), nullable=True)
+    ib_account_no = Column(String(50), nullable=True)
 
+
+class Transaction(Base, TimestampMixin):
+    __tablename__ = "transaction"
+    __table_args__ = (
+        Index("idx_transaction_account_id_trade_date", "account_id", "trade_date"),
+        Index("ix_tx_account_date", "account_id", "trade_date"),
+        Index("ix_tx_asset_date", "account_id", "asset_code", "trade_date"),
+        Index("ix_tx_category_date", "account_id", "tx_category", "trade_date"),
+        Index("ix_tx_type", "tx_type"),
+        Index("ix_tx_category", "tx_category"),
+        Index("ix_tx_asset", "asset_code"),
+    )
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
+    trade_date = Column(Date, nullable=False)
+    asset_code = Column(String(50))
+    asset_name = Column(String(200), nullable=True)
+    asset_type = Column(String(20), nullable=True)
+    quantity = Column(Numeric(24, 8))
+    price = Column(Numeric(24, 8))
+    currency = Column(String(10), nullable=False, default="USD")
+    amount = Column(Numeric(24, 8))
+    fee = Column(Numeric(24, 8), default=0)
+    tx_type = Column(String(50), nullable=False)
+    tx_category = Column(String(30))
+    source = Column(String(30), default="manual")
+    batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
+    description = Column(Text, nullable=True)
+    realized_pnl = Column(Numeric(24, 8), nullable=True)
+    settle_date = Column(Date, nullable=True)
+    # Fee decomposition
+    tx_subtype = Column(String(30), nullable=True)
+    gross_amount = Column(Numeric(24, 8), nullable=True)
+    commission = Column(Numeric(24, 8), nullable=True)
+    transaction_fee = Column(Numeric(24, 8), nullable=True)
+    other_fee = Column(Numeric(24, 8), nullable=True)
+    # Asset metadata
+    isin = Column(String(20), nullable=True)
+    exchange = Column(String(10), nullable=True)
+    close_price = Column(Numeric(24, 8), nullable=True)
+    cost_basis = Column(Numeric(24, 8), nullable=True)
+    # Option fields
+    option_underlying = Column(String(20), nullable=True)
+    option_expiry = Column(Date, nullable=True)
+    option_strike = Column(Numeric(24, 8), nullable=True)
+    option_type = Column(String(4), nullable=True)
+    option_multiplier = Column(Integer, nullable=True)
+    # FX fields
+    fx_from_currency = Column(String(10), nullable=True)
+    fx_from_amount = Column(Numeric(24, 8), nullable=True)
+    fx_to_currency = Column(String(10), nullable=True)
+    fx_to_amount = Column(Numeric(24, 8), nullable=True)
+    fx_rate = Column(Numeric(18, 8), nullable=True)
+    # Accrual
+    accrual_period_start = Column(Date, nullable=True)
+    accrual_period_end = Column(Date, nullable=True)
+    is_accrual_reversal = Column(Boolean, nullable=True, default=False)
+    # Corporate action
+    corporate_ratio = Column(Numeric(10, 6), nullable=True)
+    corporate_new_code = Column(String(50), nullable=True)
+    # Lending
+    lending_asset_code = Column(String(50), nullable=True)
+    lending_quantity = Column(Numeric(24, 8), nullable=True)
+    lending_rate_pct = Column(Numeric(10, 6), nullable=True)
+    # Internal
+    counterparty_account = Column(String(50), nullable=True)
+    created_by = Column(Integer, ForeignKey("auth_user.id"), nullable=True)
+    updated_by = Column(Integer, ForeignKey("auth_user.id"), nullable=True)
 
 
 class Position(Base, TimestampMixin):
     __tablename__ = "position"
     __table_args__ = (
-        UniqueConstraint("account_id", "asset_code", "snapshot_date", name="uq_position_account_asset_snapshot"),
-        Index("idx_position_account_snapshot_date", "account_id", "snapshot_date"),
+        UniqueConstraint("account_id", "asset_code", "snapshot_date", name="uq_position_account_asset_date"),
     )
     id = Column(Integer, primary_key=True)
     account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
     asset_code = Column(String(50), nullable=False)
     quantity = Column(Numeric(24, 8), nullable=False)
     average_cost = Column(Numeric(24, 8))
-    currency = Column(String(10), nullable=False)
     snapshot_date = Column(Date, nullable=False)
-    source_batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
-    is_checkpoint = Column(Boolean, nullable=True, default=True)
-    # True = system-computed checkpoint snapshot
-    checkpoint_tx_id = Column(Integer, nullable=True)
 
+
+class CashPosition(Base, TimestampMixin):
+    __tablename__ = "cash_position"
+    __table_args__ = (UniqueConstraint("account_id", "currency", "snapshot_date", name="uq_cash_position_account_currency_date"),)
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
+    currency = Column(String(10), nullable=False)
+    amount = Column(Numeric(24, 8), nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    note = Column(String(255))
+    source_batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
+
+
+# ── Import ────────────────────────────────────────────────────────────────
 
 class ImportBatch(Base, TimestampMixin):
     __tablename__ = "import_batch"
-    __table_args__ = (
-        CheckConstraint("row_count >= 0", name="ck_import_batch_row_count_non_negative"),
-        CheckConstraint("parsed_count >= 0", name="ck_import_batch_parsed_count_non_negative"),
-        CheckConstraint("confirmed_count >= 0", name="ck_import_batch_confirmed_count_non_negative"),
-        Index("idx_import_batch_account_id", "account_id"),
-        Index("idx_import_batch_status", "status"),
-    )
     id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
     source = Column(String(50), nullable=False)
     filename = Column(String(255))
-    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
+    file_hash = Column(String(64))
     status = Column(String(30), nullable=False, default="uploaded")
     row_count = Column(Integer, nullable=False, default=0)
     parsed_count = Column(Integer, nullable=False, default=0)
     confirmed_count = Column(Integer, nullable=False, default=0)
+    parsed_data = Column(Text)
     failed_reason = Column(Text)
-    preview_json = Column(Text, nullable=False, default="[]")
-    pending_deposits = Column(Text)  # JSON list of deposit rows awaiting capital-event confirmation
-    file_hash = Column(String(64), nullable=True)  # SHA256 of uploaded file, for dedup detection
-    imported_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    @property
-    def preview_rows(self):
-        try:
-            return json.loads(self.preview_json or "[]")
-        except json.JSONDecodeError:
-            return []
-
-    @property
-    def pending_deposit_rows(self):
-        try:
-            return json.loads(self.pending_deposits or "[]")
-        except json.JSONDecodeError:
-            return []
+    overlap_info = Column(Text)
+    pending_deposits = Column(Text)
 
 
-class Transaction(Base, TimestampMixin):
-    __tablename__ = "transaction"
-    __table_args__ = (
-        Index("idx_transaction_account_trade_date", "account_id", "trade_date"),
-        Index("idx_transaction_import_batch_id", "import_batch_id"),
-    )
-    id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
-    import_batch_id = Column(Integer, ForeignKey("import_batch.id"))
-
-    # Classification
-    tx_category = Column(String(20), nullable=False, default="EQUITY")
-    # EQUITY / CASH / FX / MARGIN / CORPORATE
-    tx_type = Column(String(50), nullable=False)
-    source = Column(String(20), nullable=False, default="manual")
-    # manual / pdf_import / csv_import / system / migration
-
-    # Timing
-    trade_date = Column(Date, nullable=False)
-    settle_date = Column(Date, nullable=True)
-
-    # Core amount (nullable: CASH/FX don't use amount in the equity sense)
-    currency = Column(String(10), nullable=False)
-    amount = Column(Numeric(24, 8), nullable=True)
-    # positive = cash inflow, negative = cash outflow
-    fee = Column(Numeric(24, 8), nullable=False, default=0)
-
-    # Original description
-    description = Column(Text, nullable=True)
-
-    # ── EQUITY fields ──────────────────────────────────────────────────────
-    asset_code = Column(String(50), nullable=True)      # nullable for CASH/FX
-    asset_name = Column(String(200), nullable=True)
-    asset_type = Column(String(20), nullable=True)
-    # stock / etf / crypto / option / fund / warrant
-    quantity = Column(Numeric(24, 8), nullable=True)    # buy=positive, sell=negative
-    price = Column(Numeric(24, 8), nullable=True)       # unit price
-    realized_pnl = Column(Numeric(24, 8), nullable=True)
-
-    # ── Option fields ──────────────────────────────────────────────────────
-    option_underlying = Column(String(20), nullable=True)
-    option_expiry = Column(Date, nullable=True)
-    option_strike = Column(Numeric(24, 8), nullable=True)
-    option_type = Column(String(4), nullable=True)      # call / put
-    option_multiplier = Column(Integer, nullable=True, default=100)
-
-    # ── FX fields ──────────────────────────────────────────────────────────
-    fx_from_currency = Column(String(10), nullable=True)
-    fx_from_amount = Column(Numeric(24, 8), nullable=True)   # negative (sold)
-    fx_to_currency = Column(String(10), nullable=True)
-    fx_to_amount = Column(Numeric(24, 8), nullable=True)     # positive (bought)
-    fx_rate = Column(Numeric(18, 8), nullable=True)
-    fx_pnl = Column(Numeric(24, 8), nullable=True)
-
-    # ── Corporate action fields ────────────────────────────────────────────
-    corporate_ratio = Column(Numeric(10, 6), nullable=True)
-    corporate_ref_code = Column(String(50), nullable=True)
-
-    # ── V4.1: Subtype ──────────────────────────────────────────────────────
-    tx_subtype = Column(String(30), nullable=True)
-    # e.g. "eft"/"transfer" under deposit; "ordinary"/"special" under dividend
-
-    # ── V4.1: Fee decomposition (legacy fee column preserved for compat) ───
-    gross_amount = Column(Numeric(24, 8), nullable=True)
-    # Trade amount before fees (qty × price in native currency)
-    commission = Column(Numeric(24, 8), nullable=True, default=0)
-    # Broker commission (always negative or 0)
-    transaction_fee = Column(Numeric(24, 8), nullable=True, default=0)
-    # Exchange/regulatory fee — 港股印花税 etc. (negative)
-    other_fee = Column(Numeric(24, 8), nullable=True, default=0)
-    # ADR fees, dividend fees (negative)
-
-    # ── V4.1: Asset metadata ───────────────────────────────────────────────
-    isin = Column(String(20), nullable=True)           # e.g. KYG3777B1032
-    exchange = Column(String(20), nullable=True)       # HK / US / CN
-    multiplier = Column(Integer, nullable=True, default=1)
-    # Contract multiplier (stock=1, option=100); distinct from option_multiplier
-    close_price = Column(Numeric(24, 8), nullable=True)   # closing price for M2M
-    cost_basis = Column(Numeric(24, 8), nullable=True)    # IB-provided cost basis
-
-    # ── V4.1: Securities lending ───────────────────────────────────────────
-    lending_counterparty = Column(String(100), nullable=True)
-    lending_rate = Column(Numeric(10, 6), nullable=True)   # annualised %
-    collateral_amount = Column(Numeric(24, 8), nullable=True)
-
-    # ── V4.1: Accruals ─────────────────────────────────────────────────────
-    accrual_type = Column(String(20), nullable=True)
-    # "interest_accrual" / "dividend_accrual"
-    accrual_period_start = Column(Date, nullable=True)
-    accrual_period_end = Column(Date, nullable=True)
-    accrual_reversal_id = Column(Integer, ForeignKey("transaction.id"), nullable=True)
-
-    # ── V4.1: Internal transfer ────────────────────────────────────────────
-    counterparty_account = Column(String(50), nullable=True)
-    # e.g. "I164167" for IB internal transfer
-
-    # ── V4.2: Securities lending (detailed) ───────────────────────────────
-    lending_asset_code = Column(String(50), nullable=True)    # stock lent
-    lending_quantity = Column(Numeric(24, 8), nullable=True)  # qty lent (negative)
-    lending_rate_pct = Column(Numeric(10, 6), nullable=True)  # annualised rate %
-
-    # ── V4.2: Accrual reversal flag ───────────────────────────────────────
-    is_accrual_reversal = Column(Boolean, nullable=True, default=False)
-    # TRUE = this reverses a prior accrual (next period cancels previous)
-
-    # ── V4.2: Corporate action new code ───────────────────────────────────
-    corporate_new_code = Column(String(50), nullable=True)
-    # new ticker after spinoff/split
-
-    # ── V4.2: Audit trail ─────────────────────────────────────────────────
-    created_by = Column(Integer, ForeignKey("auth_user.id"), nullable=True)
-    updated_by = Column(Integer, ForeignKey("auth_user.id"), nullable=True)
-
-    @property
-    def net_amount(self):
-        """Net cash impact = amount + fee (fee is already negative)."""
-        a = self.amount or 0
-        f = self.fee or 0
-        return float(a) + float(f)
-
-
-class ExchangeRate(Base, TimestampMixin):
-    __tablename__ = "exchange_rate"
-    __table_args__ = (UniqueConstraint("base_currency", "quote_currency", "snapshot_date"),)
-    id = Column(Integer, primary_key=True)
-    base_currency = Column(String(10), nullable=False)
-    quote_currency = Column(String(10), nullable=False)
-    rate = Column(Numeric(20, 8), nullable=False)
-    snapshot_date = Column(Date, nullable=False)
-    source = Column(String(50), nullable=True)  # data source: manual / frankfurter / csv
-
+# ── Pricing & FX ──────────────────────────────────────────────────────────
 
 class AssetPrice(Base, TimestampMixin):
     __tablename__ = "asset_price"
@@ -268,15 +175,26 @@ class AssetPrice(Base, TimestampMixin):
     snapshot_date = Column(Date, nullable=False)
 
 
-class NAVRecord(Base, TimestampMixin):
-    __tablename__ = "nav_record"
-    __table_args__ = (UniqueConstraint("fund_id", "nav_date"),)
+class ExchangeRate(Base, TimestampMixin):
+    __tablename__ = "exchange_rate"
+    __table_args__ = (UniqueConstraint("base_currency", "quote_currency", "rate_date", name="uq_exchange_rate_pair_date"),)
     id = Column(Integer, primary_key=True)
-    fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
+    base_currency = Column(String(10), nullable=False)
+    quote_currency = Column(String(10), nullable=False)
+    rate = Column(Numeric(18, 8), nullable=False)
+    rate_date = Column(Date, nullable=False)
+    source = Column(String(20), nullable=False, default="manual")
+
+
+# ── Portfolio Snapshots (was NAV) ─────────────────────────────────────────
+
+class NAVRecord(Base, TimestampMixin):
+    """Portfolio value snapshot — total assets across all accounts on a given date."""
+    __tablename__ = "nav_record"
+    __table_args__ = (UniqueConstraint("nav_date", name="uq_nav_record_date"),)
+    id = Column(Integer, primary_key=True)
     nav_date = Column(Date, nullable=False)
     total_assets_usd = Column(Numeric(24, 8), nullable=False)
-    total_shares = Column(Numeric(24, 8), nullable=False)
-    nav_per_share = Column(Numeric(24, 8), nullable=False)
     is_locked = Column(Boolean, nullable=False, default=False)
     cash_total_usd = Column(Numeric(24, 8))
     positions_total_usd = Column(Numeric(24, 8))
@@ -298,83 +216,7 @@ class AssetSnapshot(Base, TimestampMixin):
     account_ids = Column(Text)
 
 
-class ShareTransaction(Base, TimestampMixin):
-    __tablename__ = "share_transaction"
-    __table_args__ = (Index("idx_share_transaction_client_date", "client_id", "tx_date"),)
-    id = Column(Integer, primary_key=True)
-    fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
-    client_id = Column(Integer, ForeignKey("client.id"), nullable=True)
-    tx_date = Column(Date, nullable=False)
-    tx_type = Column(String(20), nullable=False)
-    amount_usd = Column(Numeric(24, 8), nullable=False)
-    shares = Column(Numeric(24, 8), nullable=False)
-    nav_at_date = Column(Numeric(24, 8), nullable=False)
-
-
-class FeeRecord(Base, TimestampMixin):
-    __tablename__ = "fee_record"
-    __table_args__ = (
-        UniqueConstraint("fund_id", "fee_date", name="uq_fee_record_fund_fee_date"),
-        Index("idx_fee_record_fund_date", "fund_id", "fee_date"),
-    )
-    id = Column(Integer, primary_key=True)
-    fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
-    fee_date = Column(Date, nullable=False)
-    gross_return = Column(Numeric(12, 6), nullable=False)
-    fee_rate = Column(Numeric(12, 6), nullable=False)
-    fee_amount_usd = Column(Numeric(24, 8), nullable=False)
-    nav_start = Column(Numeric(24, 8))
-    nav_end_before_fee = Column(Numeric(24, 8))
-    annual_return_pct = Column(Numeric(12, 6))
-    excess_return_pct = Column(Numeric(12, 6))
-    fee_base_usd = Column(Numeric(24, 8))
-    nav_after_fee = Column(Numeric(24, 8))
-    applied_date = Column(Date)
-
-
-class AuditLog(Base, TimestampMixin):
-    __tablename__ = "audit_log"
-    __table_args__ = (
-        Index("idx_audit_log_action_created_at", "action", "created_at"),
-        Index("idx_audit_log_client_scope_id", "client_scope_id"),
-    )
-    id = Column(Integer, primary_key=True)
-    actor_role = Column(String(50), nullable=False)
-    actor_id = Column(String(100), nullable=False)
-    client_scope_id = Column(Integer)
-    action = Column(String(100), nullable=False)
-    entity_type = Column(String(100), nullable=False)
-    entity_id = Column(String(100))
-    status = Column(String(30), nullable=False, default="success")
-    detail_json = Column(Text, nullable=False, default="{}")
-
-    @property
-    def detail(self):
-        try:
-            return json.loads(self.detail_json or "{}")
-        except json.JSONDecodeError:
-            return {}
-
-
-class SchedulerJobRun(Base, TimestampMixin):
-    __tablename__ = "scheduler_job_run"
-    __table_args__ = (Index("idx_scheduler_job_run_name_started_at", "job_name", "started_at"),)
-    id = Column(Integer, primary_key=True)
-    job_name = Column(String(100), nullable=False)
-    trigger_source = Column(String(30), nullable=False)
-    status = Column(String(30), nullable=False)
-    message = Column(Text)
-    detail_json = Column(Text, nullable=False, default="{}")
-    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    finished_at = Column(DateTime(timezone=True))
-
-    @property
-    def detail(self):
-        try:
-            return json.loads(self.detail_json or "{}")
-        except json.JSONDecodeError:
-            return {}
-
+# ── Auth & Audit ──────────────────────────────────────────────────────────
 
 class AuthUser(Base, TimestampMixin):
     __tablename__ = "auth_user"
@@ -383,7 +225,6 @@ class AuthUser(Base, TimestampMixin):
     username = Column(String(100), nullable=False)
     password_hash = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False)
-    client_scope_id = Column(Integer, ForeignKey("client.id"))
     display_name = Column(String(255))
     is_active = Column(Boolean, nullable=False, default=True)
     last_login_at = Column(DateTime(timezone=True))
@@ -417,135 +258,43 @@ class AuthSession(Base, TimestampMixin):
     refreshed_at = Column(DateTime(timezone=True))
 
 
-class CashPosition(Base, TimestampMixin):
-    __tablename__ = "cash_position"
-    __table_args__ = (UniqueConstraint("account_id", "currency", "snapshot_date", name="uq_cash_position_account_currency_date"),)
-    id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
-    currency = Column(String(10), nullable=False)
-    amount = Column(Numeric(24, 8), nullable=False)
-    snapshot_date = Column(Date, nullable=False)
-    note = Column(String(255))
-    source_batch_id = Column(Integer, ForeignKey("import_batch.id"), nullable=True)
-
-
-class ShareRegister(Base, TimestampMixin):
-    __tablename__ = "share_register"
-    __table_args__ = (Index("idx_share_register_fund_client", "fund_id", "client_id"),)
-    id = Column(Integer, primary_key=True)
-    fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
-    client_id = Column(Integer, ForeignKey("client.id"), nullable=True)
-    event_date = Column(Date, nullable=False)
-    event_type = Column(String(30), nullable=False)
-    shares_delta = Column(Numeric(24, 8), nullable=False)
-    shares_after = Column(Numeric(24, 8), nullable=False)
-    nav_per_share = Column(Numeric(24, 8), nullable=False)
-    amount_usd = Column(Numeric(24, 8))
-    ref_share_tx_id = Column(Integer, ForeignKey("share_transaction.id"))
-    note = Column(String(255))
-
-
-class ClientCapitalAccount(Base, TimestampMixin):
-    __tablename__ = "client_capital_account"
-    __table_args__ = (UniqueConstraint("fund_id", "client_id", name="uq_client_capital_account_fund_client"),)
-    id = Column(Integer, primary_key=True)
-    fund_id = Column(Integer, ForeignKey("fund.id"), nullable=False)
-    client_id = Column(Integer, ForeignKey("client.id"), nullable=False)
-    total_invested_usd = Column(Numeric(24, 8), nullable=False, default=0)
-    total_redeemed_usd = Column(Numeric(24, 8), nullable=False, default=0)
-    avg_cost_nav = Column(Numeric(24, 8))
-    current_shares = Column(Numeric(24, 8), nullable=False, default=0)
-    unrealized_pnl_usd = Column(Numeric(24, 8))
-    last_updated_date = Column(Date)
-
-
-class PdfImportBatch(Base, TimestampMixin):
-    """Tracks PDF annual-statement import batches (year-end snapshot workflow)."""
-    __tablename__ = "pdf_import_batch"
+class AuditLog(Base, TimestampMixin):
+    __tablename__ = "audit_log"
     __table_args__ = (
-        Index("idx_pdf_import_batch_account_id", "account_id"),
-        Index("idx_pdf_import_batch_status", "status"),
+        Index("idx_audit_log_action_created_at", "action", "created_at"),
     )
     id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
-    snapshot_date = Column(Date, nullable=False)  # year-end date, e.g. 2023-12-31
-    filename = Column(String(255))
-    status = Column(String(30), nullable=False, default="uploaded")  # uploaded / parsed / confirmed / failed / reset
-    parsed_data = Column(Text)   # JSON: AI-extracted positions/cash/capital_events
-    confirmed_data = Column(Text)  # JSON: user-confirmed data (after inline edits)
-    pending_deposits = Column(Text)  # JSON: capital events awaiting confirmation
-    failed_reason = Column(Text)
-    ai_model = Column(String(100))  # model used for parsing, e.g. qwen2.5:72b
+    actor_role = Column(String(50), nullable=False)
+    actor_id = Column(String(100), nullable=False)
+    action = Column(String(100), nullable=False)
+    entity_type = Column(String(100), nullable=False)
+    entity_id = Column(String(100))
+    status = Column(String(30), nullable=False, default="success")
+    detail_json = Column(Text, nullable=False, default="{}")
 
     @property
-    def parsed_result(self) -> dict:
+    def detail(self):
         try:
-            return json.loads(self.parsed_data or "{}")
+            return json.loads(self.detail_json or "{}")
         except json.JSONDecodeError:
             return {}
 
+
+class SchedulerJobRun(Base, TimestampMixin):
+    __tablename__ = "scheduler_job_run"
+    __table_args__ = (Index("idx_scheduler_job_run_name_started_at", "job_name", "started_at"),)
+    id = Column(Integer, primary_key=True)
+    job_name = Column(String(100), nullable=False)
+    trigger_source = Column(String(30), nullable=False)
+    status = Column(String(30), nullable=False)
+    message = Column(Text)
+    detail_json = Column(Text, nullable=False, default="{}")
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at = Column(DateTime(timezone=True))
+
     @property
-    def confirmed_result(self) -> dict:
+    def detail(self):
         try:
-            return json.loads(self.confirmed_data or "{}")
+            return json.loads(self.detail_json or "{}")
         except json.JSONDecodeError:
             return {}
-
-    @property
-    def pending_deposit_rows(self) -> list:
-        try:
-            return json.loads(self.pending_deposits or "[]")
-        except json.JSONDecodeError:
-            return []
-
-
-# ── V4.1: New tables ──────────────────────────────────────────────────────────
-
-class CashCollateral(Base):
-    """Securities lending: IB-managed collateral tracking.
-    When IB lends out a stock, cash collateral is posted and a mirroring
-    securities-lent liability is created. Net impact on NAV = 0.
-    """
-    __tablename__ = "cash_collateral"
-    __table_args__ = (
-        Index("idx_cash_collateral_account_id", "account_id"),
-    )
-    id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
-    asset_code = Column(String(50), nullable=False)    # e.g. TSLA
-    quantity_lent = Column(Numeric(24, 8), nullable=False)   # negative (lent out)
-    collateral_usd = Column(Numeric(24, 8), nullable=True)   # positive (cash posted)
-    lending_rate = Column(Numeric(10, 6), nullable=True)     # annualised %
-    start_date = Column(Date, nullable=False)
-    end_date = Column(Date, nullable=True)    # NULL = still outstanding
-    transaction_id = Column(Integer, ForeignKey("transaction.id"), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-
-class Accrual(Base):
-    """Interest/dividend accruals: affect NAV but do not hit the cash ledger.
-
-    Negative amount = liability (unpaid interest, unrecorded dividend payable).
-    Positive amount = asset (declared dividend not yet received).
-
-    Reversal workflow:
-      Month-end → write Accrual(is_reversed=False)
-      Next month actual payment → mark is_reversed=True + write Transaction
-    """
-    __tablename__ = "accrual"
-    __table_args__ = (
-        Index("idx_accrual_account_id", "account_id"),
-        Index("idx_accrual_account_date", "account_id", "accrual_date"),
-    )
-    id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey("account.id"), nullable=False)
-    accrual_type = Column(String(20), nullable=False)
-    # "interest_accrual" | "dividend_accrual"
-    currency = Column(String(10), nullable=False)
-    amount = Column(Numeric(24, 8), nullable=False)     # negative = liability
-    accrual_date = Column(Date, nullable=False)
-    expected_pay_date = Column(Date, nullable=True)
-    asset_code = Column(String(50), nullable=True)      # for dividend accruals
-    is_reversed = Column(Boolean, nullable=False, default=False)
-    reversal_date = Column(Date, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

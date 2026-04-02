@@ -37,61 +37,9 @@ class PriceFetchRequest(BaseModel):
 
 
 class NavCalcRequest(BaseModel):
-    fund_id: int
     nav_date: date
     force: bool = False
 
-
-class ShareRequest(BaseModel):
-    fund_id: int
-    client_id: int
-    tx_date: date
-    amount_usd: Decimal
-
-
-class FeeCalcRequest(BaseModel):
-    fund_id: int
-    fee_date: date
-
-
-class FundCreateRequest(BaseModel):
-    name: str
-    base_currency: str = "USD"
-    total_shares: Optional[Decimal] = None
-    fund_code: Optional[str] = None
-    fund_type: str = "private_equity"
-    status: str = "draft"
-    inception_date: Optional[date] = None
-    hurdle_rate: Optional[Decimal] = None
-    perf_fee_rate: Optional[Decimal] = None
-    perf_fee_frequency: Optional[str] = None
-    subscription_cycle: Optional[str] = None
-    nav_decimal: int = 6
-    share_decimal: int = 6
-    description: Optional[str] = None
-
-class FundUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    base_currency: Optional[str] = None
-    total_shares: Optional[Decimal] = None
-    fund_code: Optional[str] = None
-    fund_type: Optional[str] = None
-    status: Optional[str] = None
-    inception_date: Optional[date] = None
-    first_capital_date: Optional[date] = None
-    hurdle_rate: Optional[Decimal] = None
-    perf_fee_rate: Optional[Decimal] = None
-    perf_fee_frequency: Optional[str] = None
-    subscription_cycle: Optional[str] = None
-    nav_decimal: Optional[int] = None
-    share_decimal: Optional[int] = None
-    description: Optional[str] = None
-
-class SeedCapitalRequest(BaseModel):
-    client_id: Optional[int] = None
-    amount_usd: Decimal
-    seed_date: date
-    shares_override: Optional[Decimal] = None  # if set, use this instead of amount ÷ 1.0
 
 class CashPositionUpsertRequest(BaseModel):
     account_id: int
@@ -100,16 +48,7 @@ class CashPositionUpsertRequest(BaseModel):
     snapshot_date: date
     note: Optional[str] = None
 
-class ClientCreateRequest(BaseModel):
-    name: str
-    email: Optional[str] = None
-
-class ClientUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    email: Optional[str] = None
-
 class AccountCreateRequest(BaseModel):
-    fund_id: int
     holder_name: Optional[str] = None
     broker: str
     account_no: str
@@ -121,7 +60,6 @@ class AccountCreateRequest(BaseModel):
     ib_account_no: Optional[str] = None           # e.g. U8312308
 
 class AccountUpdateRequest(BaseModel):
-    fund_id: Optional[int] = None
     holder_name: Optional[str] = None
     broker: Optional[str] = None
     account_no: Optional[str] = None
@@ -133,7 +71,7 @@ class AccountUpdateRequest(BaseModel):
     ib_account_no: Optional[str] = None
 
 class TransactionCreateRequest(BaseModel):
-    """V4.2: Manual transaction entry — all transaction types."""
+    """V4.2: Manual transaction entry -- all transaction types."""
     account_id: int
     tx_category: str                    # TRADE / CASH / FX / LENDING / ACCRUAL / CORPORATE
     tx_type: str                        # see TxType enum in spec
@@ -260,15 +198,7 @@ class AuthUserUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
 
 
-class DepositConfirmRequest(BaseModel):
-    deposit_index: int
-    client_id: Optional[int] = None
-    confirm_as: str  # 'additional' or 'skip'
-    note: str = ""
-
-
 class NavRebuildRequest(BaseModel):
-    fund_id: int
     start_date: date
     end_date: date
     frequency: str = "quarterly"  # 'quarterly' / 'yearly' / 'monthly'
@@ -284,10 +214,3 @@ class PriceManualRequest(BaseModel):
     @classmethod
     def normalize_asset(cls, v: str) -> str:
         return v.strip().upper()
-
-
-class PdfImportConfirmRequest(BaseModel):
-    confirmed_data: Optional[dict] = None  # user-edited positions/cash/capital_events
-
-    class Config:
-        arbitrary_types_allowed = True

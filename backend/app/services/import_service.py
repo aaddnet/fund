@@ -65,8 +65,6 @@ BUY_TX_TYPES = {"buy", "b", "subscribe", "sub"}
 SELL_TX_TYPES = {"sell", "s", "redeem", "redemption", "withdrawal"}
 # Forex/cash tx types are pass-through — not normalized to buy/sell
 FOREX_CASH_TX_TYPES = {"forex_buy", "forex_sell", "cash_in", "cash_out"}
-# Deposit rows flagged for manual capital-event confirmation (never auto-create Position)
-DEPOSIT_PENDING_TX_TYPE = "deposit_pending"
 
 # V4.1: Extended category sets
 _ACCRUAL_TX_TYPES = {
@@ -197,9 +195,7 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
     if not preview_rows:
         raise ValueError("This batch has no parsed rows to confirm.")
 
-    # Separate deposit rows (pending capital events) from trade/cash rows
-    trade_rows = [r for r in preview_rows if r["tx_type"] != DEPOSIT_PENDING_TX_TYPE]
-    deposit_rows = [r for r in preview_rows if r["tx_type"] == DEPOSIT_PENDING_TX_TYPE]
+    trade_rows = preview_rows
 
     for item in trade_rows:
         tx_type_lower = (item["tx_type"] or "").lower()
@@ -281,22 +277,7 @@ def confirm_batch(db: Session, batch_id: int) -> ImportBatch:
     # Generate CashPosition snapshots from forex/cash transactions
     _build_cash_positions(db, batch.account_id, trade_rows, source_batch_id=batch.id)
 
-    # Store deposit rows in pending_deposits for manual confirmation
-    if deposit_rows:
-        pending = [
-            {
-                "date": r["trade_date"],
-                "amount_usd": float(r["quantity"]),
-                "tx_type": r["tx_type"],
-                "currency": r["currency"],
-                "note": r.get("asset_code", ""),
-            }
-            for r in deposit_rows
-        ]
-        batch.pending_deposits = json.dumps(pending)
-        batch.status = "confirmed_pending_deposits"
-    else:
-        batch.status = IMPORT_STATUS_CONFIRMED
+    batch.status = IMPORT_STATUS_CONFIRMED
 
     batch.confirmed_count = len(trade_rows)
     batch.failed_reason = None
@@ -435,7 +416,7 @@ def _build_positions(account_id: int, preview_rows: list[dict[str, Any]]) -> lis
         tx_t = item["tx_type"]
         _NON_TRADE = (
             FOREX_CASH_TX_TYPES | _CASH_TX_TYPES | _ACCRUAL_TX_TYPES | _SECURITIES_LENDING_TX_TYPES
-            | {DEPOSIT_PENDING_TX_TYPE, "fx_translation", "fx_trade", "fx",
+            | {"fx_translation", "fx_trade", "fx",
                "deposit_eft", "deposit_transfer", "withdrawal", "dividend", "pil",
                "dividend_fee", "interest_debit", "interest_credit", "adr_fee",
                "other_fee", "adjustment", "lending_income",
@@ -578,8 +559,6 @@ def _normalize_tx_type(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "_")
     if normalized in FOREX_CASH_TX_TYPES:
         return normalized
-    if normalized == DEPOSIT_PENDING_TX_TYPE:
-        return DEPOSIT_PENDING_TX_TYPE
     if normalized in BUY_TX_TYPES:
         return "buy"
     if normalized in SELL_TX_TYPES:
@@ -588,7 +567,7 @@ def _normalize_tx_type(value: str) -> str:
 
 
 def _normalize_quantity_for_tx_type(quantity: Decimal, tx_type: str) -> Decimal:
-    if tx_type in FOREX_CASH_TX_TYPES or tx_type == DEPOSIT_PENDING_TX_TYPE:
+    if tx_type in FOREX_CASH_TX_TYPES:
         return quantity.copy_abs()  # always positive, direction is in tx_type
     if tx_type == "sell" and quantity > 0:
         return quantity * Decimal("-1")

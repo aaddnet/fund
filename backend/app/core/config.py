@@ -35,16 +35,12 @@ class Settings:
     scheduler_fx_hour: int = int(os.getenv("SCHEDULER_FX_HOUR", "6"))
     scheduler_fx_minute: int = int(os.getenv("SCHEDULER_FX_MINUTE", "0"))
     scheduler_fx_pairs: str = os.getenv("SCHEDULER_FX_PAIRS", "HKD:USD,SGD:USD,CNY:USD")
-    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen3-vl:8b")
 
     def __post_init__(self) -> None:
         raw_bootstrap = os.getenv(
             "AUTH_BOOTSTRAP_USERS_JSON",
             '[{"username":"admin","password":"Admin12345","role":"admin","display_name":"Admin User"},'
-            '{"username":"ops","password":"Ops1234567","role":"ops","display_name":"Operations User"},'
-            '{"username":"client1","password":"Client12345","role":"client-readonly","client_scope_id":1,"display_name":"Client Demo"},'
-            '{"username":"ops.viewer","password":"Viewer12345","role":"ops-readonly","display_name":"Operations Viewer"}]',
+            '{"username":"ops","password":"Ops1234567","role":"ops","display_name":"Operations User"}]',
         )
         try:
             self.auth_bootstrap_users = json.loads(raw_bootstrap)

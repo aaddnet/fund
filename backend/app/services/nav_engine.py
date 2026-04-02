@@ -15,14 +15,14 @@ getcontext().prec = 28
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
-from app.models import Account, AssetPrice, AssetSnapshot, CashPosition, ExchangeRate, Fund, NAVRecord, Position
+from app.models import Account, AssetPrice, AssetSnapshot, CashPosition, ExchangeRate, NAVRecord, Position
 
 USD = "USD"
 ZERO = Decimal("0")
 
 
-def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
-    existing = db.query(NAVRecord).filter_by(fund_id=fund_id, nav_date=nav_date).first()
+def calc_nav(db: Session, nav_date, force: bool = False):
+    existing = db.query(NAVRecord).filter_by(nav_date=nav_date).first()
     if existing and not force:
         return existing
     if existing and force:
@@ -31,13 +31,9 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
         db.delete(existing)
         db.flush()
 
-    fund = db.query(Fund).filter(Fund.id == fund_id).first()
-    if not fund:
-        raise ValueError(f"Fund {fund_id} was not found.")
-
-    account_ids = [row[0] for row in db.query(Account.id).filter(Account.fund_id == fund_id).all()]
+    account_ids = [row[0] for row in db.query(Account.id).all()]
     if not account_ids:
-        raise ValueError(f"Fund {fund_id} has no accounts.")
+        raise ValueError("No accounts found.")
 
     # For each (account, asset), take the latest snapshot on or before nav_date.
     # This ensures we always use the most recent known position even when there
@@ -69,15 +65,10 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
         .all()
     )
     if not positions:
-        # No positions on this date (e.g. historical date before fund had positions).
-        # Return a $0 NAV record instead of raising an error.
-        total_shares_zero = Decimal(str(fund.total_shares or 1))
+        # No positions on this date — return a $0 NAV record.
         nav_zero = NAVRecord(
-            fund_id=fund_id,
             nav_date=nav_date,
             total_assets_usd=ZERO,
-            total_shares=total_shares_zero,
-            nav_per_share=ZERO,
             is_locked=True,
         )
         db.add(nav_zero)
@@ -112,8 +103,6 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
             continue
         total_assets_usd += valuation["value_usd"]
 
-        # 注意这里按 asset + currency 聚合快照，方便 V1 页面快速看持仓结构，
-        # 同时保留 account_ids 便于排查某个资产来自哪些账户。
         bucket_key = (position.asset_code.upper(), position.currency.upper())
         bucket = grouped_snapshots[bucket_key]
         bucket["quantity"] += Decimal(str(position.quantity))
@@ -161,21 +150,12 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
     positions_total = total_assets_usd
     total_assets_usd += cash_total
 
-    total_shares = Decimal(str(fund.total_shares or 0))
-    if total_shares <= ZERO:
-        # V1 允许先算出总资产，再由后续 share 流程逐步补齐份额。
-        total_shares = Decimal("1")
-    nav_per_share = total_assets_usd / total_shares if total_shares else ZERO
-
     if missing_rates:
-        logger.warning("NAV %s fund %s: skipped assets with missing FX rates: %s", nav_date, fund_id, sorted(missing_rates))
+        logger.warning("NAV %s: skipped assets with missing FX rates: %s", nav_date, sorted(missing_rates))
 
     nav = NAVRecord(
-        fund_id=fund_id,
         nav_date=nav_date,
         total_assets_usd=total_assets_usd,
-        total_shares=total_shares,
-        nav_per_share=nav_per_share,
         is_locked=True,
         cash_total_usd=cash_total,
         positions_total_usd=positions_total,
@@ -204,19 +184,18 @@ def calc_nav(db: Session, fund_id: int, nav_date, force: bool = False):
     return nav
 
 
-def rebuild_nav_batch(db: Session, fund_id: int, start_date: date, end_date: date, frequency: str = "quarterly", force: bool = False) -> list[dict]:
+def rebuild_nav_batch(db: Session, start_date: date, end_date: date, frequency: str = "quarterly", force: bool = False) -> list[dict]:
     """
     Batch-rebuild NAV records for a date range at a given frequency.
-    Returns a list of {date, nav_per_share, status} result dicts.
+    Returns a list of {date, total_assets_usd, status} result dicts.
     """
     dates = _generate_nav_dates(start_date, end_date, frequency)
     results = []
     for d in dates:
         try:
-            nav = calc_nav(db, fund_id, d, force=force)
+            nav = calc_nav(db, d, force=force)
             results.append({
                 "date": d.isoformat(),
-                "nav_per_share": float(nav.nav_per_share),
                 "total_assets_usd": float(nav.total_assets_usd),
                 "status": "ok",
             })
@@ -256,9 +235,9 @@ def _generate_nav_dates(start: date, end: date, frequency: str) -> list[date]:
     return sorted(dates)
 
 
-def check_nav_rates(db: Session, fund_id: int, nav_date) -> dict:
+def check_nav_rates(db: Session, nav_date) -> dict:
     """Pre-flight: return which FX rates are missing for a NAV calculation."""
-    account_ids = [row[0] for row in db.query(Account.id).filter(Account.fund_id == fund_id).all()]
+    account_ids = [row[0] for row in db.query(Account.id).all()]
     if not account_ids:
         return {"ready": True, "missing_rates": [], "assets_affected": []}
 
@@ -323,11 +302,8 @@ def check_nav_rates(db: Session, fund_id: int, nav_date) -> dict:
     }
 
 
-def list_nav(db: Session, fund_id: Optional[int] = None):
-    query = db.query(NAVRecord)
-    if fund_id is not None:
-        query = query.filter(NAVRecord.fund_id == fund_id)
-    return query.order_by(NAVRecord.nav_date.desc(), NAVRecord.id.desc()).all()
+def list_nav(db: Session):
+    return db.query(NAVRecord).order_by(NAVRecord.nav_date.desc(), NAVRecord.id.desc()).all()
 
 
 def _value_position(position: Position, price_map: dict[str, AssetPrice], rate_map: dict[tuple[str, str], Decimal]) -> Optional[dict[str, Decimal]]:
@@ -346,8 +322,6 @@ def _value_position(position: Position, price_map: dict[str, AssetPrice], rate_m
         price_native = price_usd if currency == USD else (price_usd / fx_rate_to_usd if fx_rate_to_usd else ZERO)
         value_native = quantity * price_native
     else:
-        # 没有价格快照时，V1 使用持仓平均成本作为兜底估值，
-        # 非 USD 资产再通过对应 snapshot_date 的汇率折算到 USD。
         price_native = average_cost
         value_native = quantity * price_native
         price_usd = price_native if currency == USD else price_native * fx_rate_to_usd
@@ -381,5 +355,5 @@ def _resolve_rate_to_usd(currency: str, rate_map: dict[tuple[str, str], Decimal]
     if inverse:
         return Decimal("1") / inverse
 
-    logger.warning("Missing FX rate for %s/USD — asset skipped in NAV calculation", currency)
+    logger.warning("Missing FX rate for %s/USD -- asset skipped in NAV calculation", currency)
     return None

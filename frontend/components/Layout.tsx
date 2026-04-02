@@ -28,43 +28,26 @@ export default function Layout({ title, children, subtitle, requiredPermission }
 
   const navGroups: NavGroup[] = [
     {
-      label: t('navGroupOverview'),
+      label: locale === 'zh' ? '投资组合' : 'Portfolio',
       items: [
         { href: '/', label: t('overview') },
         { href: '/dashboard', label: t('dashboard'), requiredPermission: 'dashboard.read' },
-      ],
-    },
-    {
-      label: t('navGroupFund'),
-      items: [
-        { href: '/funds', label: t('funds'), requiredPermission: 'nav.read' },
-        { href: '/nav', label: t('nav'), requiredPermission: 'nav.read' },
-        { href: '/shares', label: t('shares'), requiredPermission: 'shares.read' },
-        { href: '/register', label: t('register'), requiredPermission: 'shares.read' },
-      ],
-    },
-    {
-      label: t('navGroupAccount'),
-      items: [
         { href: '/accounts', label: t('accounts'), requiredPermission: 'accounts.read' },
-        { href: '/transactions', label: '交易管理', requiredPermission: 'accounts.read' },
+        { href: '/nav', label: locale === 'zh' ? '组合价值' : 'Portfolio Value', requiredPermission: 'nav.read' },
+      ],
+    },
+    {
+      label: locale === 'zh' ? '数据管理' : 'Data',
+      items: [
+        { href: '/transactions', label: locale === 'zh' ? '交易管理' : 'Transactions', requiredPermission: 'accounts.read' },
         { href: '/import', label: t('import'), requiredPermission: 'import.read' },
-        { href: '/pdf-import', label: 'PDF 年度账单', requiredPermission: 'import.read' },
         { href: '/cash', label: t('cash'), requiredPermission: 'nav.read' },
       ],
     },
     {
-      label: t('navGroupClient'),
-      items: [
-        { href: '/clients', label: t('clients'), requiredPermission: 'clients.read' },
-        { href: `/customers/${user?.client_scope_id || 1}`, label: t('customerView'), requiredPermission: 'customer.read' },
-      ],
-    },
-    {
-      label: t('navGroupOps'),
+      label: locale === 'zh' ? '系统' : 'System',
       items: [
         { href: '/reports', label: t('reports'), requiredPermission: 'reports.read' },
-        { href: '/initialize', label: t('initialize'), requiredPermission: 'clients.write' },
         { href: '/settings', label: t('settings'), requiredPermission: 'nav.read' },
       ],
     },
