@@ -1,41 +1,24 @@
 /**
  * /cash — Cash Ledger View (V4.3)
- *
- * Read-only account ledger: balance summary + chronological cash flow.
- * Balances and flow are calculated in real-time from the Transaction table.
+ * Read-only: balance summary + cash flow, calculated from transactions.
  */
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
-import { Account } from '../lib/api';
+import { Account, fetchJson, getAccounts } from '../lib/api';
 import { requirePageAuth } from '../lib/pageAuth';
 import { colors, styles } from '../lib/ui';
 
-// Inline style helpers not in the legacy styles object
 const S = {
   select: {
-    padding: '8px 12px',
-    borderRadius: 8,
-    border: `1px solid ${colors.border}`,
-    fontSize: 14,
-    background: '#fff',
+    padding: '8px 12px', borderRadius: 8,
+    border: `1px solid ${colors.border}`, fontSize: 14, background: '#fff',
   } as React.CSSProperties,
-  btn: {
-    padding: '8px 16px',
-    borderRadius: 8,
+  btn: (secondary = false): React.CSSProperties => ({
+    padding: '8px 16px', borderRadius: 8, fontSize: 14, cursor: 'pointer', fontWeight: 600,
     border: `1px solid ${colors.border}`,
-    background: colors.primary,
-    color: '#fff',
-    fontSize: 14,
-    cursor: 'pointer',
-    fontWeight: 600,
-  } as React.CSSProperties,
-};
-
-import React from 'react';
-
-type CurrencyBalance = {
-  currency: string;
-  balance: number;
+    background: secondary ? '#f3f4f6' : colors.primary,
+    color: secondary ? colors.text : '#fff',
+  }),
 };
 
 type BalanceResponse = {
@@ -56,13 +39,11 @@ type FlowEntry = {
   balance_after: number;
 };
 
-type Props = {
-  accounts: Account[];
-  apiBase: string;
-  error?: string;
-};
+type CurrencyBalance = { currency: string; balance: number };
 
-const TX_TYPE_LABELS: Record<string, string> = {
+type Props = { accounts: Account[]; error?: string };
+
+const TX_LABELS: Record<string, string> = {
   stock_buy: '股票买入', stock_sell: '股票卖出',
   option_buy: '期权买入', option_sell: '期权卖出',
   deposit_eft: '存款入金', deposit_transfer: '存款划转',
@@ -70,41 +51,38 @@ const TX_TYPE_LABELS: Record<string, string> = {
   dividend_fee: '股息税费', interest_debit: '融资利息',
   interest_credit: '利息收入', adr_fee: 'ADR费用',
   other_fee: '其他费用', adjustment: '调整', fx_trade: '换汇',
-  lending_income: '出借收入', lending_out: '证券出借',
-  lending_return: '证券归还',
+  lending_income: '出借收入',
 };
 
 const CURRENCIES = ['USD', 'HKD', 'CNH', 'EUR', 'GBP'];
 
-function fmtNum(n: number, d = 2) {
+function fmt(n: number, d = 2) {
   return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
-export default function CashPage({ accounts, apiBase, error }: Props) {
-  const [accountId, setAccountId] = useState<string>(String(accounts[0]?.id ?? ''));
-  const [asOfDate, setAsOfDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
-
+export default function CashPage({ accounts, error }: Props) {
+  const [accountId, setAccountId] = useState(String(accounts[0]?.id ?? ''));
+  const [asOfDate, setAsOfDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [balances, setBalances] = useState<CurrencyBalance[]>([]);
-  const [flowCurrency, setFlowCurrency] = useState<string>('USD');
-  const [flowStart, setFlowStart] = useState<string>('');
-  const [flowEnd, setFlowEnd] = useState<string>('');
+  const [flowCurrency, setFlowCurrency] = useState('USD');
+  const [flowStart, setFlowStart] = useState('');
+  const [flowEnd, setFlowEnd] = useState('');
   const [flowEntries, setFlowEntries] = useState<FlowEntry[]>([]);
-
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [flowLoading, setFlowLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
 
-  async function fetchBalances() {
+  async function loadBalances() {
     if (!accountId) return;
     setBalanceLoading(true);
     setBalanceError(null);
     try {
-      const res = await fetch(`${apiBase}/cash/balance?account_id=${accountId}&as_of_date=${asOfDate}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: BalanceResponse = await res.json();
+      const data = await fetchJson<BalanceResponse>(
+        `/cash/balance?account_id=${accountId}&as_of_date=${asOfDate}`
+      );
       const entries = Object.entries(data.balances)
         .map(([currency, balance]) => ({ currency, balance }))
-        .sort((a, b) => (a.balance !== 0 ? -1 : 1) - (b.balance !== 0 ? -1 : 1) || a.currency.localeCompare(b.currency));
+        .sort((a, b) => (Math.abs(b.balance) - Math.abs(a.balance)) || a.currency.localeCompare(b.currency));
       setBalances(entries);
     } catch (e: unknown) {
       setBalanceError(e instanceof Error ? e.message : '加载失败');
@@ -113,13 +91,13 @@ export default function CashPage({ accounts, apiBase, error }: Props) {
     }
   }
 
-  async function fetchFlow() {
+  async function loadFlow() {
     if (!accountId) return;
     setFlowLoading(true);
     try {
-      const res = await fetch(`${apiBase}/cash/flow?account_id=${accountId}&currency=${flowCurrency}&limit=500`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      let data: FlowEntry[] = await res.json();
+      let data = await fetchJson<FlowEntry[]>(
+        `/cash/flow?account_id=${accountId}&currency=${flowCurrency}&limit=500`
+      );
       if (flowStart) data = data.filter(e => e.trade_date >= flowStart);
       if (flowEnd) data = data.filter(e => e.trade_date <= flowEnd + 'T99');
       setFlowEntries(data);
@@ -130,12 +108,8 @@ export default function CashPage({ accounts, apiBase, error }: Props) {
     }
   }
 
-  useEffect(() => { void fetchBalances(); }, [accountId, asOfDate]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { void fetchFlow(); }, [accountId, flowCurrency, flowStart, flowEnd]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function handleExport() {
-    window.open(`${apiBase}/cash/flow/export?account_id=${accountId}&currency=${flowCurrency}`, '_blank');
-  }
+  useEffect(() => { void loadBalances(); }, [accountId, asOfDate]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadFlow(); }, [accountId, flowCurrency, flowStart, flowEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <Layout title="现金账本">
@@ -161,14 +135,14 @@ export default function CashPage({ accounts, apiBase, error }: Props) {
           <label style={styles.label}>截至日期</label>
           <input type="date" value={asOfDate} onChange={e => setAsOfDate(e.target.value)} style={styles.input} />
         </div>
-        <button onClick={() => { void fetchBalances(); }} style={S.btn}>刷新余额</button>
+        <button onClick={() => { void loadBalances(); }} style={S.btn()}>刷新余额</button>
       </div>
 
       {/* Balance cards */}
       <div style={{ marginBottom: 28 }}>
         <h3 style={{ fontSize: 15, fontWeight: 600, color: colors.text, marginBottom: 12 }}>当前余额汇总</h3>
         {balanceLoading && <p style={{ color: colors.muted, fontSize: 14 }}>计算中…</p>}
-        {balanceError && <p style={{ color: colors.danger, fontSize: 14 }}>⚠️ {balanceError} — 请确认后端已升级至 V4.3</p>}
+        {balanceError && <p style={{ color: colors.danger, fontSize: 14 }}>⚠️ {balanceError}</p>}
         {!balanceLoading && !balanceError && balances.length === 0 && (
           <p style={{ color: colors.muted, fontSize: 14 }}>暂无余额记录（该账户还没有交易记录）</p>
         )}
@@ -183,10 +157,14 @@ export default function CashPage({ accounts, apiBase, error }: Props) {
               }}>
                 <div style={{ fontSize: 13, color: colors.muted, marginBottom: 4 }}>
                   {currency}
-                  {isNeg && <span style={{ marginLeft: 8, fontSize: 11, color: '#b91c1c', fontWeight: 600, background: '#fee2e2', padding: '1px 6px', borderRadius: 4 }}>融资负债</span>}
+                  {isNeg && (
+                    <span style={{ marginLeft: 8, fontSize: 11, color: '#b91c1c', fontWeight: 600, background: '#fee2e2', padding: '1px 6px', borderRadius: 4 }}>
+                      融资负债
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: 22, fontWeight: 700, color: isNeg ? '#b91c1c' : '#166534' }}>
-                  {isNeg ? '-' : ''}{fmtNum(Math.abs(balance))}
+                  {isNeg ? '-' : ''}{fmt(Math.abs(balance))}
                 </div>
               </div>
             );
@@ -200,7 +178,7 @@ export default function CashPage({ accounts, apiBase, error }: Props) {
           <h3 style={{ fontSize: 15, fontWeight: 600, color: colors.text, margin: 0 }}>现金流水明细</h3>
           <div>
             <label style={styles.label}>币种</label>
-            <select value={flowCurrency} onChange={e => setFlowCurrency(e.target.value)} style={{ ...S.select, width: 80 }}>
+            <select value={flowCurrency} onChange={e => setFlowCurrency(e.target.value)} style={{ ...S.select, width: 90 }}>
               {CURRENCIES.map(c => <option key={c}>{c}</option>)}
             </select>
           </div>
@@ -212,9 +190,6 @@ export default function CashPage({ accounts, apiBase, error }: Props) {
             <label style={styles.label}>结束</label>
             <input type="date" value={flowEnd} onChange={e => setFlowEnd(e.target.value)} style={styles.input} />
           </div>
-          <button onClick={handleExport} style={{ ...S.btn, background: '#f3f4f6', color: colors.text, border: `1px solid ${colors.border}` }}>
-            导出 CSV
-          </button>
         </div>
 
         {flowLoading && <p style={{ color: colors.muted, fontSize: 14 }}>加载中…</p>}
@@ -229,21 +204,21 @@ export default function CashPage({ accounts, apiBase, error }: Props) {
                 {flowEntries.map((e, i) => {
                   const isPos = e.delta > 0;
                   return (
-                    <tr key={e.tx_id} style={{ background: i % 2 === 0 ? '#fff' : '#f9fafb' }}>
+                    <tr key={`${e.tx_id}-${i}`} style={{ background: i % 2 === 0 ? '#fff' : '#f9fafb' }}>
                       <td style={styles.td}>{e.trade_date?.slice(0, 10)}</td>
                       <td style={styles.td}>
-                        <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, background: '#f3f4f6', color: colors.text }}>
-                          {TX_TYPE_LABELS[e.tx_type] || e.tx_type}
+                        <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, background: '#f3f4f6' }}>
+                          {TX_LABELS[e.tx_type] || e.tx_type}
                         </span>
                       </td>
                       <td style={{ ...styles.td, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {e.description || '—'}
                       </td>
                       <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600, color: isPos ? '#166534' : '#b91c1c' }}>
-                        {isPos ? '+' : ''}{fmtNum(e.delta)}
+                        {isPos ? '+' : ''}{fmt(e.delta)}
                       </td>
                       <td style={{ ...styles.td, textAlign: 'right', color: e.balance_after < 0 ? '#b91c1c' : colors.text }}>
-                        {fmtNum(e.balance_after)}
+                        {fmt(e.balance_after)}
                       </td>
                     </tr>
                   );
@@ -260,13 +235,11 @@ export default function CashPage({ accounts, apiBase, error }: Props) {
 export async function getServerSideProps(context: any) {
   const auth = await requirePageAuth(context);
   if (!auth || 'redirect' in auth) return { redirect: { destination: '/login', permanent: false } };
-
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000';
   try {
     const { getAccounts } = await import('../lib/api');
     const acctResp = await getAccounts({ size: 100, accessToken: auth.accessToken });
-    return { props: { accounts: acctResp.items || [], apiBase } };
+    return { props: { accounts: acctResp.items || [] } };
   } catch (e: unknown) {
-    return { props: { accounts: [], apiBase, error: String(e instanceof Error ? e.message : e) } };
+    return { props: { accounts: [], error: String(e instanceof Error ? e.message : e) } };
   }
 }
